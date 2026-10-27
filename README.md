@@ -31,9 +31,12 @@ HA_TOKEN=your-home-assistant-long-lived-access-token
 Create `config.yaml`:
 
 ```yaml
+listen:
+  socket: /run/agentpass/agent.sock
+  group: agentpass-clients
+
 gateway:
-  host: "0.0.0.0"
-  port: 8443
+  # health_port: 8210   # optional: /healthz only; the audit dashboard is on listen.admin_socket (docs/DESIGN.md, section 9)
 
 agent:
   token: "${AGENT_TOKEN}"
@@ -97,7 +100,11 @@ pip install agentpass
 **2. Send requests**
 
 ```bash
-# Use wss:// in production, ws:// only if the gateway was started with --insecure
+# Same machine: the Unix socket (group agentpass-clients, no TLS or --insecure needed)
+agentpass tools --socket /run/agentpass/agent.sock --token $AGENT_TOKEN
+# (equivalent: --url unix:///run/agentpass/agent.sock)
+
+# Over TCP: wss:// in production, ws:// only if the gateway was started with --insecure
 
 # List available tools
 agentpass tools --url ws://gateway:8443 --token $AGENT_TOKEN
@@ -148,9 +155,10 @@ Agent Device (untrusted)            Gateway (trusted)
 | **Credential isolation** | Service tokens live only on the gateway. The agent device never sees them.         |
 | **Policy engine**        | Every request matches YAML permission rules using glob patterns. Deny always wins. |
 | **Human-in-the-loop**    | `ask` rules trigger a Telegram message with inline approve/deny buttons.           |
-| **Transport security**   | WSS (TLS) required by default. Plaintext only with explicit `--insecure`.          |
+| **Transport security**   | Unix socket by default (0660, group `agentpass-clients`, plaintext OK). TCP needs TLS or `--insecure`; wildcard binds refused. |
 | **Input validation**     | Glob metacharacters, control chars, and invalid identifiers are rejected.          |
 | **Rate limiting**        | Max 10 pending approvals, max 60 requests/minute (configurable).                   |
+| **Remembered decisions** | "Allow always" / "Deny always" in Telegram store a revocable rule in the database. A remembered allow can only turn `ask` into `allow` (never overrides a deny, a passkey rule or a high-risk tool), and expires after 90 days (exact call) or 30 days (whole tool). See `docs/REMEMBERED-DECISIONS.md`. |
 
 ---
 
@@ -164,6 +172,11 @@ agentpass serve [--insecure] [--config config.yaml] [--permissions permissions.y
 agentpass request <tool> [key=value ...] --url <ws-url> --token <token> [--timeout 900]
 agentpass tools --url <ws-url> --token <token>
 agentpass pending --url <ws-url> --token <token>
+
+# Gateway (trusted device): remembered "Allow always" / "Deny always" rules, via the admin socket
+agentpass remembered list [--agent ID] [--all] [--json] [--config config.yaml | --socket PATH]
+agentpass remembered revoke ID [ID ...]
+agentpass remembered revoke --agent ID --all
 ```
 
 | Command   | Runs on      | Description                                               |
@@ -172,6 +185,7 @@ agentpass pending --url <ws-url> --token <token>
 | `request` | Agent device | Send a one-shot tool request and print the JSON result    |
 | `tools`   | Agent device | List available tools with their arguments                 |
 | `pending` | Agent device | Retrieve results for requests resolved while offline      |
+| `remembered` | Gateway   | List or revoke remembered Allow/Deny always rules         |
 
 **Exit codes:** 0 = success, 1 = denied, 2 = timeout, 3 = connection error, 4 = invalid args.
 
@@ -341,15 +355,78 @@ That's it. Restart the gateway and the tools are available.
 
 ---
 
+## Transports, Approval Channels and Operations
+
+### Listeners
+
+The agent API listens on a Unix socket by default (`listen.socket`, mode 0660, group `listen.group`). Plaintext is fine there because the kernel limits access to the service user and that group. `listen.tcp` is optional and loopback-only; wildcard binds (`0.0.0.0`, `::`) are refused unless `allow_wildcard: true`, and TCP needs TLS unless the gateway is started with `--insecure`.
+
+The audit dashboard and the remembered-rules page live on their own admin Unix socket (`listen.admin_socket`, group `listen.admin_group`), never on the agent socket. `/healthz` is off unless `gateway.health_port` is set. List ports that other software on the host owns in `gateway.reserved_ports`; `check-config` rejects a health or dashboard port that collides.
+
+### MCP endpoint
+
+With `mcp.enabled: true` the gateway also serves MCP over streamable HTTP (`POST /mcp`, `Authorization: Bearer agp_<id>_<secret>`). It runs on its own loopback port (or a Unix socket via `mcp.socket`) and needs per-agent identities. It calls the same request pipeline as the WebSocket API, so policy, approvals, audit and rate limits are identical. Tools that need approval wait up to `mcp.inline_wait` seconds, then return `pending_approval`; the agent polls with the `gateway_result` tool (`gateway_pending` lists open approvals).
+
+### Per-agent identities
+
+```bash
+agentpass agent create my-agent --config config.yaml   # prints the token once
+```
+
+Setting `agent.agents_dir` replaces the shared `agent.token`. Each agent has a file (`agents/NAME.yaml`) with a token hash, rate limit and rules. `agent.policy_dir/_floor.yaml` holds denies that no agent file can override, and shared rule sets (such as `policy/github.yaml`) are pulled in with `extends`. Audit and pending rows record the agent id.
+
+### Approval channels
+
+Approval requests fan out to every channel configured for the rule:
+
+| Channel | Type | Can approve? |
+| --- | --- | --- |
+| Telegram Guardian bot | `telegram` | Yes (inline buttons, allow-listed users) |
+| Passkey approval page | `passkey` | Yes (WebAuthn assertion bound to the request) |
+| Webhook / command | `webhook`, `command` | No, display-only notifications with a link |
+
+The passkey page is an aiohttp app on loopback. Publish it only on a private network (for example with `tailscale serve`), set `passkey.rp_id` and `passkey.origin` to that name, and enrol a device with `agentpass passkey enroll`. Only public keys are stored on the host. An `ask` rule can require a channel kind (`approval: { require: passkey }`, or `telegram`, default `any_trusted`) so a chat button cannot approve high-risk calls. Use the `channels:` list in `config.yaml` instead of the `messenger:` shorthand to configure several. See [docs/DESIGN.md](docs/DESIGN.md) for the threat model and the approval proof.
+
+### Offline validation
+
+```bash
+agentpass check-config --config config.yaml [--strict] [--json]
+```
+
+Loads the config, tool files, agent files and rules with the same loaders as `serve`, then lints the rules (rules matching no tool, reserved ports, missing groups, risky dashboard setups). It makes no network calls and never prints secret values. Exit codes: 0 clean, 1 errors (or warnings with `--strict`), 2 warnings only. Run it before every restart, for example as a systemd `ExecStartPre`.
+
+### Google OAuth (Gmail, Calendar, Drive)
+
+Services with `auth: {type: oauth2, provider: google, account: NAME}` use refresh tokens stored under `<storage dir>/tokens/` (mode 0600). Put the OAuth client id and secret in a `secrets.yaml` next to the config, never in `config.yaml`.
+
+```bash
+agentpass auth google --account personal --scopes gmail.modify,calendar,drive
+agentpass auth status
+agentpass auth revoke --account personal
+```
+
+The auth CLI resolves the token directory exactly as the gateway does and refuses to start the consent flow if it cannot write there. When consent is missing or expired, tool calls fail with a generic "needs operator action" error and the operator is notified once.
+
+### Remembered decisions
+
+"Allow always" / "Deny always" buttons store a revocable rule in the database. Eligibility depends on the tool's `risk` and `remember` keys (see Tool Definition YAML below). List and revoke rules with `agentpass remembered list|revoke` or on the dashboard's remembered-rules page; details are in [docs/REMEMBERED-DECISIONS.md](docs/REMEMBERED-DECISIONS.md).
+
 ## Configuration Reference
 
 ### config.yaml
 
 ```yaml
+listen:
+  socket: /run/agentpass/agent.sock # default; mode 0660, group below. null disables it
+  group: agentpass-clients # the service user must be a member
+  # tcp: # optional, loopback only
+  #   host: "127.0.0.1" # 0.0.0.0 and :: are refused unless allow_wildcard: true
+  #   port: 8205
+  #   allow_wildcard: false
+
 gateway:
-  host: "0.0.0.0" # Bind address
-  port: 8443 # Listen port
-  tls: # Omit for --insecure mode
+  # health_port: 8210   # optional: /healthz only; the audit dashboard is on listen.admin_socket (docs/DESIGN.md, section 9)
+  tls: # for listen.tcp; omit for --insecure mode
     cert: "/path/to/cert.pem"
     key: "/path/to/key.pem"
 
@@ -418,7 +495,18 @@ tools:
       body_exclude: [arg1, arg2] # Args excluded from POST body
     response:
       wrap: "key_name" # Wrap response in {"key_name": data}
+    risk: low|medium|high # Shown in the approval message; gates "Allow always" (see below)
+    remember: args|signature # What "Allow always, exact call" matches. Default: args
 ```
+
+**`risk`** is a display hint and also limits remembered decisions: a tool with `risk: high` never
+offers "Allow always"; a tool with no `risk` offers only the exact-call scope. Set it on every tool.
+
+**`remember`** decides what "Allow always: this exact call" compares. The default `args` matches the
+signature *and* every argument the agent sent (a different time window, body or extra argument
+asks again). `signature` matches the signature alone, for read-only tools whose signature already
+names what matters (`gmail_list_messages(in:inbox)` repeated with another `max_results` is the same
+request). Use it only on `risk: low` reads; never on a tool that writes or sends.
 
 **Signature templates** control how permission patterns match. For example, with `signature: "{domain}.{service}, {entity_id}"`, calling `ha_call_service` with `domain=light, service=turn_on, entity_id=light.bedroom` produces the signature `ha_call_service(light.turn_on, light.bedroom)`, which is matched against permission rules using glob patterns.
 
