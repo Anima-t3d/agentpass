@@ -1,3 +1,6 @@
+# Generic example only. It publishes 8443 on all interfaces and runs the gateway inside a
+# container daemon that its clients may control. For a hardened setup run the gateway as a
+# dedicated service user behind a Unix socket (see docs/DESIGN.md, section 1).
 services:
   agentpass:
     build: .

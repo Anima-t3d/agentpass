@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentpass — Remembered decisions</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #0f1117; color: #e1e4ed; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; }
+  a { color: #6c8cff; }
+  table { border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #2a2d3a; vertical-align: top; }
+  th { color: #8b8fa3; font-weight: 500; }
+  code { font-size: 12px; word-break: break-all; }
+  .allow { color: #4ade80; } .deny { color: #f87171; }
+  .inactive, .expired, .revoked { color: #8b8fa3; }
+  button { background: #1a1d27; color: #e1e4ed; border: 1px solid #2a2d3a; border-radius: 6px;
+           padding: 4px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Remembered decisions</h1>
+<p><a href="/audit/">Audit log</a> ·
+{% if show_all %}<a href="/remembered/">Active only</a>{% else %}<a href="/remembered/?all=1">Show all</a>{% endif %}
+· Rules are created only from Telegram (Allow always / Deny always).</p>
+<table>
+<thead><tr><th>#</th><th>Agent</th><th>Action</th><th>Scope</th><th>Pattern</th><th>State</th>
+<th>Expires</th><th>Created</th><th>Last used</th><th>Uses</th><th></th></tr></thead>
+<tbody>
+{% for r in rules %}
+<tr>
+<td>{{ r.id }}</td><td>{{ r.agent_id }}</td>
+<td class="{{ r.action }}">{{ r.action }}</td><td>{{ r.scope }}</td>
+<td><code>{{ r.pattern }}</code></td>
+<td class="{{ r.state }}">{{ r.state }}{% if r.state_reason %}: {{ r.state_reason }}{% endif %}</td>
+<td>{{ r.expires_at or "never" }}</td>
+<td>{{ r.created_at }} by {{ r.created_by }}</td>
+<td>{{ r.last_used_at or "—" }}</td><td>{{ r.use_count }}</td>
+<td>{% if not r.revoked_at %}<button data-id="{{ r.id }}">Revoke</button>{% endif %}</td>
+</tr>
+{% else %}
+<tr><td colspan="11">No rules.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<script>
+document.querySelectorAll("button[data-id]").forEach(function (b) {
+  b.addEventListener("click", async function () {
+    if (!confirm("Revoke rule #" + b.dataset.id + "?")) return;
+    const r = await fetch("/remembered/api/rules/" + b.dataset.id + "/revoke", {
+      method: "POST", headers: {"{{ csrf_header }}": "{{ csrf_value }}"}});
+    if (r.ok) location.reload(); else alert("Revoke failed: " + r.status);
+  });
+});
+</script>
+</body>
+</html>

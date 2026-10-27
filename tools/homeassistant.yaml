@@ -6,12 +6,15 @@ tools:
       entity_id:
         required: true
         validate: "^[a-z][a-z0-9_]*\\.[a-z0-9][a-z0-9_]*$"
+    risk: low
+    remember: signature
     request:
       method: GET
       path: "/api/states/{entity_id}"
 
   ha_get_states:
     description: "Get all entity states from Home Assistant"
+    risk: low
     request:
       method: GET
       path: "/api/states"
@@ -20,6 +23,7 @@ tools:
 
   ha_get_services:
     description: "List available services and their fields"
+    risk: low
     request:
       method: GET
       path: "/api/services"
@@ -33,9 +37,13 @@ tools:
       entity_id:
         required: true
         validate: "^[a-z][a-z0-9_]*\\.[a-z0-9][a-z0-9_]*$"
+    risk: low
+    remember: signature
     request:
       method: GET
-      path: "/api/history/period?filter_entity_id={entity_id}"
+      path: "/api/history/period"
+      query:
+        filter_entity_id: "{entity_id}"
     response:
       wrap: "history"
 
@@ -46,14 +54,19 @@ tools:
       entity_id:
         required: true
         validate: "^[a-z][a-z0-9_]*\\.[a-z0-9][a-z0-9_]*$"
+    risk: low
+    remember: signature
     request:
       method: GET
-      path: "/api/logbook?entity={entity_id}"
+      path: "/api/logbook"
+      query:
+        entity: "{entity_id}"
     response:
       wrap: "logbook"
 
   ha_get_config:
     description: "Get Home Assistant configuration"
+    risk: low
     request:
       method: GET
       path: "/api/config"
@@ -66,6 +79,8 @@ tools:
     args:
       template:
         required: true
+        description: "Jinja template"
+    risk: low
     request:
       method: POST
       path: "/api/template"
@@ -85,10 +100,25 @@ tools:
       entity_id:
         required: false
         validate: "^[a-z][a-z0-9_]*\\.[a-z0-9][a-z0-9_]*$"
+      # Service data: declared and typed, not part of the signature.
+      brightness:
+        { type: integer, min: 0, max: 255, signature: false, description: "Light brightness" }
+      transition:
+        { type: number, min: 0, max: 300, signature: false, description: "Transition seconds" }
+      color_temp_kelvin:
+        { type: integer, min: 1000, max: 10000, signature: false, description: "Color temperature" }
+      rgb_color:
+        type: array
+        items: { type: integer, min: 0, max: 255 }
+        max_items: 3
+        signature: false
+        description: "RGB triple"
+    risk: high
     request:
       method: POST
       path: "/api/services/{domain}/{service}"
-      body_exclude: [domain, service]
+      body:
+        include: [entity_id, brightness, transition, color_temp_kelvin, rgb_color]
     response:
       wrap: "result"
 
@@ -99,6 +129,7 @@ tools:
       event_type:
         required: true
         validate: "^[a-z][a-z0-9_.]*$"
+    risk: high
     request:
       method: POST
       path: "/api/events/{event_type}"

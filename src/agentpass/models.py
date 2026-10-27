@@ -26,24 +26,14 @@ class ToolRequest:
 
 
 @dataclass
-class ToolResult:
-    """Result of an executed tool request."""
-
-    request_id: str
-    status: str  # "executed" or "denied"
-    data: dict[str, Any] | None = None
-
-
-@dataclass
 class PendingApproval:
     """A tool request awaiting human approval."""
 
     request: ToolRequest
-    future: asyncio.Future
-    message_id: str | None = None
-    timeout_task: asyncio.Task | None = None
+    future: asyncio.Future | None = None
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0
+    agent_id: str = "default"
 
 
 @dataclass
@@ -61,3 +51,4 @@ class AuditEntry:
     resolved_at: float | None = None
     execution_result: dict[str, Any] | None = None
     agent_id: str = "default"
+    remembered_rule_id: int | None = None

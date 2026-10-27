@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from agentpass.config import ConfigError, ServiceConfig, ToolDefinition
+
+REDACTED = "[redacted]"
+AUDIT_RESULT_LIMIT = 2000
 
 
 class ToolRegistry:
@@ -47,14 +51,20 @@ class ToolRegistry:
         parts = [p.strip() for p in tool.signature.split(",")]
         result: list[str] = []
         for part in parts:
+            # A part referencing an absent arg is omitted, not rendered empty
+            keys = re.findall(r"\{(\w+)\}", part)
+            if any(k not in args for k in keys):
+                continue
             # Replace {arg_name} with actual values, support {a}.{b} composites
-            def replacer(m: re.Match, _args: dict = args) -> str:
-                key = m.group(1)
-                return str(_args.get(key, ""))
-
-            interpolated = re.sub(r"\{(\w+)\}", replacer, part)
-            result.append(interpolated)
+            result.append(re.sub(r"\{(\w+)\}", lambda m, _a=args: str(_a[m.group(1)]), part))
         return result
+
+    def get_signature_arg_names(self, name: str) -> set[str]:
+        """Return the arg names referenced by the tool's signature template."""
+        tool = self._tools.get(name)
+        if tool is None or not tool.signature:
+            return set()
+        return set(re.findall(r"\{(\w+)\}", tool.signature))
 
     def get_arg_validators(self, name: str) -> dict[str, re.Pattern]:
         """Return pre-compiled regex validators for the tool's args."""
@@ -66,6 +76,40 @@ class ToolRegistry:
         if tool is None:
             return set()
         return {arg_name for arg_name, arg_def in tool.args.items() if arg_def.required}
+
+    def apply_defaults(self, name: str, args: dict) -> dict:
+        """Return *args* plus declared defaults for absent args.
+
+        Defaults only affect the executed request; the signature is built from
+        the args the agent sent, so it stays stable.
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return dict(args)
+        out = dict(args)
+        for arg_name, arg_def in tool.args.items():
+            if arg_name not in out and arg_def.default is not None:
+                out[arg_name] = arg_def.default
+        return out
+
+    def redact_args(self, name: str, args: dict) -> dict:
+        """Return *args* with the tool's ``audit.redact_args`` values masked."""
+        tool = self._tools.get(name)
+        if tool is None or not tool.redact_args:
+            return args
+        return {k: (REDACTED if k in tool.redact_args else v) for k, v in args.items()}
+
+    def audit_result(self, name: str, result: dict | None) -> dict | None:
+        """Return the part of *result* to keep in the audit row (``audit.store_result``)."""
+        tool = self._tools.get(name)
+        if result is None or tool is None or tool.store_result == "full":
+            return result
+        if tool.store_result == "none":
+            return None
+        text = json.dumps(result)
+        if len(text) <= AUDIT_RESULT_LIMIT:
+            return result
+        return {"truncated": text[:AUDIT_RESULT_LIMIT]}
 
     def all_tools(self) -> list[ToolDefinition]:
         """Return all tool definitions in the registry."""

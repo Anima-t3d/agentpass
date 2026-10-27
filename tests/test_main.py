@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agentpass.config import ListenConfig, TcpListen
+
 # ---------------------------------------------------------------------------
 # parse_args tests
 # ---------------------------------------------------------------------------
@@ -65,16 +67,21 @@ class TestParseArgs:
 def _make_mock_config(*, tls=None):
     """Build a mock Config object with all required fields."""
     config = MagicMock()
-    config.gateway.host = "0.0.0.0"
+    config.gateway.host = "127.0.0.1"
     config.gateway.port = 8765
     config.gateway.health_port = 8080
     config.gateway.health_host = "127.0.0.1"
     config.gateway.tls = tls
+    config.listen = ListenConfig(
+        socket=None, admin_socket=None, tcp=TcpListen(host="127.0.0.1", port=8765)
+    )
+    config.mcp.socket = None
     config.agent.token = "secret-token"
-    config.messenger.telegram = MagicMock()
+    config.agent.agents_dir = None
     config.services = {"homeassistant": MagicMock()}
     config.storage.path = "/tmp/test-gate.db"
     config.approval_timeout = 900
+    config.mcp.enabled = False
     config.rate_limit = MagicMock()
     return config
 
@@ -82,19 +89,6 @@ def _make_mock_config(*, tls=None):
 def _make_mock_permissions():
     """Build a mock Permissions object."""
     return MagicMock()
-
-
-def _make_mock_ptb_app():
-    """Build a mock PTB Application that works as an async context manager."""
-    mock_ptb_app = AsyncMock()
-    mock_ptb_app.__aenter__ = AsyncMock(return_value=mock_ptb_app)
-    mock_ptb_app.__aexit__ = AsyncMock(return_value=False)
-    mock_ptb_app.start = AsyncMock()
-    mock_ptb_app.stop = AsyncMock()
-    mock_ptb_app.updater = AsyncMock()
-    mock_ptb_app.updater.start_polling = AsyncMock()
-    mock_ptb_app.updater.stop = AsyncMock()
-    return mock_ptb_app
 
 
 def _make_ws_serve_cm():
@@ -164,16 +158,12 @@ class TestRunTlsCheck:
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -189,7 +179,8 @@ class TestRunTlsCheck:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -207,22 +198,18 @@ class TestRunStartupSequence:
     @pytest.mark.asyncio
     async def test_startup_order(self):
         """Startup calls components in correct order:
-        config -> db -> services -> health checks -> PTB start -> WS serve -> log ready.
+        config -> db -> services -> health checks -> channels start -> WS serve -> log ready.
         """
         from agentpass.__main__ import run
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -244,14 +231,8 @@ class TestRunStartupSequence:
             call_order.append("ha.health_check")
             return True
 
-        async def track_approval_cb(cb):
-            call_order.append("telegram.on_approval_callback")
-
-        async def track_ptb_start():
-            call_order.append("ptb.start")
-
-        async def track_ptb_start_polling():
-            call_order.append("ptb.updater.start_polling")
+        async def track_coordinator_start():
+            call_order.append("coordinator.start")
 
         async def track_stop_wait():
             call_order.append("ws_ready")
@@ -259,9 +240,7 @@ class TestRunStartupSequence:
         mock_db.initialize = AsyncMock(side_effect=track_db_init)
         mock_db.cleanup_stale_requests = AsyncMock(side_effect=track_db_cleanup)
         mock_ha.health_check = AsyncMock(side_effect=track_health_check)
-        mock_telegram.on_approval_callback = AsyncMock(side_effect=track_approval_cb)
-        mock_ptb.start = AsyncMock(side_effect=track_ptb_start)
-        mock_ptb.updater.start_polling = AsyncMock(side_effect=track_ptb_start_polling)
+        mock_coordinator.start = AsyncMock(side_effect=track_coordinator_start)
         mock_stop_event.wait = AsyncMock(side_effect=track_stop_wait)
 
         with (
@@ -270,18 +249,18 @@ class TestRunStartupSequence:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
         ):
             await run(args)
 
-        # Verify order: db -> health check -> PTB -> WS ready
+        # Verify order: db -> health check -> channels -> WS ready
         assert call_order.index("db.initialize") < call_order.index("ha.health_check")
-        assert call_order.index("ha.health_check") < call_order.index("ptb.start")
-        assert call_order.index("ptb.start") < call_order.index("ptb.updater.start_polling")
-        assert call_order.index("ptb.updater.start_polling") < call_order.index("ws_ready")
+        assert call_order.index("ha.health_check") < call_order.index("coordinator.start")
+        assert call_order.index("coordinator.start") < call_order.index("ws_ready")
 
     @pytest.mark.asyncio
     async def test_logs_ready_message(self, caplog):
@@ -290,16 +269,12 @@ class TestRunStartupSequence:
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -314,7 +289,8 @@ class TestRunStartupSequence:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -335,16 +311,12 @@ class TestRunHealthCheck:
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=False)  # Health check fails
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -359,7 +331,8 @@ class TestRunHealthCheck:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -379,16 +352,12 @@ class TestRunHealthCheck:
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -403,7 +372,8 @@ class TestRunHealthCheck:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -420,21 +390,17 @@ class TestRunShutdownSequence:
 
     @pytest.mark.asyncio
     async def test_shutdown_resolves_pending_and_closes_all(self):
-        """Shutdown resolves pending, stops telegram, stops PTB, closes HA, closes DB."""
+        """Shutdown resolves pending, stops channels, closes HA, closes DB."""
         from agentpass.__main__ import run
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -449,7 +415,8 @@ class TestRunShutdownSequence:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -458,9 +425,7 @@ class TestRunShutdownSequence:
 
         # Verify shutdown sequence
         mock_gateway.resolve_all_pending.assert_awaited_once_with("gateway_shutdown")
-        mock_telegram.stop.assert_awaited_once()
-        mock_ptb.updater.stop.assert_awaited_once()
-        mock_ptb.stop.assert_awaited_once()
+        mock_coordinator.stop.assert_awaited_once()
         mock_ha.close.assert_awaited_once()
         mock_db.close.assert_awaited_once()
 
@@ -475,16 +440,12 @@ class TestRunSignalHandling:
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -507,7 +468,8 @@ class TestRunSignalHandling:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -519,26 +481,22 @@ class TestRunSignalHandling:
         assert signal.SIGINT in registered_signals
 
 
-class TestRunPtbLifecycle:
-    """PTB uses manual lifecycle, NOT run_polling()."""
+class TestRunChannelLifecycle:
+    """Channels (and Telegram's manual PTB lifecycle) are started and stopped by the coordinator."""
 
     @pytest.mark.asyncio
-    async def test_ptb_manual_lifecycle(self):
-        """PTB Application is used as async context manager with start/stop."""
+    async def test_coordinator_started_and_stopped(self):
+        """start() before serving, resolve_all_pending then stop() on shutdown."""
         from agentpass.__main__ import run
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -553,24 +511,17 @@ class TestRunPtbLifecycle:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
         ):
             await run(args)
 
-        # PTB async context manager used
-        mock_ptb.__aenter__.assert_awaited_once()
-        mock_ptb.__aexit__.assert_awaited_once()
-
-        # start() and start_polling() called (NOT run_polling)
-        mock_ptb.start.assert_awaited_once()
-        mock_ptb.updater.start_polling.assert_awaited_once()
-
-        # stop() and updater.stop() called in shutdown
-        mock_ptb.stop.assert_awaited_once()
-        mock_ptb.updater.stop.assert_awaited_once()
+        mock_coordinator.start.assert_awaited_once()
+        mock_coordinator.stop.assert_awaited_once()
+        mock_gateway.resolve_all_pending.assert_awaited_once()
 
 
 class TestRunTlsContext:
@@ -586,16 +537,12 @@ class TestRunTlsContext:
         mock_tls.cert = "/path/to/cert.pem"
         mock_tls.key = "/path/to/key.pem"
         mock_config = _make_mock_config(tls=mock_tls)
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -615,7 +562,8 @@ class TestRunTlsContext:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", mock_serve),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -646,16 +594,12 @@ class TestRunTokenNeverLogged:
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
         mock_config.agent.token = "super-secret-agent-token-12345"
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
         mock_gateway = AsyncMock()
         mock_gateway.resolve_all_pending = AsyncMock()
         mock_gateway.handle_connection = AsyncMock()
@@ -670,7 +614,8 @@ class TestRunTokenNeverLogged:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", return_value=mock_gateway),
             patch(f"{_PATCH_PREFIX}.websockets.asyncio.server.serve", return_value=mock_ws_cm),
             patch(f"{_PATCH_PREFIX}.asyncio.Event", return_value=mock_stop_event),
@@ -687,22 +632,18 @@ class TestRunGatewayServerWiring:
 
     @pytest.mark.asyncio
     async def test_gateway_server_creation(self):
-        """GatewayServer is wired with engine, executor, messenger, db, etc."""
+        """GatewayServer is wired with engine, executor, coordinator, db, etc."""
         from agentpass.__main__ import run
 
         args = argparse.Namespace(config="c.yaml", permissions="p.yaml", insecure=True)
         mock_config = _make_mock_config(tls=None)
         mock_permissions = _make_mock_permissions()
-        mock_ptb = _make_mock_ptb_app()
         mock_ws_cm = _make_ws_serve_cm()
 
         mock_db = AsyncMock()
         mock_ha = AsyncMock()
         mock_ha.health_check = AsyncMock(return_value=True)
-        mock_telegram = AsyncMock()
-        mock_telegram.application = mock_ptb
-        mock_telegram.on_approval_callback = AsyncMock()
-        mock_telegram.stop = AsyncMock()
+        mock_coordinator = AsyncMock()
 
         mock_gateway_cls = MagicMock()
         mock_gateway_instance = AsyncMock()
@@ -723,7 +664,8 @@ class TestRunGatewayServerWiring:
             patch(f"{_PATCH_PREFIX}.Database", return_value=mock_db),
             patch(f"{_PATCH_PREFIX}.GenericHTTPService", return_value=mock_ha),
             patch(f"{_PATCH_PREFIX}.build_registry", return_value=MagicMock()),
-            patch(f"{_PATCH_PREFIX}.TelegramAdapter", return_value=mock_telegram),
+            patch(f"{_PATCH_PREFIX}.build_channels", return_value=[]),
+            patch(f"{_PATCH_PREFIX}.ApprovalCoordinator", return_value=mock_coordinator),
             patch(f"{_PATCH_PREFIX}.GatewayServer", mock_gateway_cls),
             patch(f"{_PATCH_PREFIX}.PermissionEngine", mock_engine_cls),
             patch(f"{_PATCH_PREFIX}.Executor", mock_executor_cls),
@@ -738,7 +680,7 @@ class TestRunGatewayServerWiring:
         assert kwargs["agent_token"] == mock_config.agent.token
         assert kwargs["engine"] == mock_engine_cls.return_value
         assert kwargs["executor"] == mock_executor_cls.return_value
-        assert kwargs["messenger"] == mock_telegram
+        assert kwargs["coordinator"] == mock_coordinator
         assert kwargs["db"] == mock_db
         assert kwargs["approval_timeout"] == mock_config.approval_timeout
         assert kwargs["rate_limit_config"] == mock_config.rate_limit

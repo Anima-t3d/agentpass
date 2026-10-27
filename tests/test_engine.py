@@ -102,7 +102,7 @@ class TestPermissionEngine:
                 "entity_id": "lock.front_door",
             },
         )
-        assert result == Decision.DENY
+        assert result.decision == Decision.DENY
 
     def test_allow_rule_when_no_deny(self, ha_registry):
         perms = self._make_permissions(
@@ -110,7 +110,7 @@ class TestPermissionEngine:
         )
         engine = PermissionEngine(perms, registry=ha_registry)
         result = engine.evaluate("ha_get_state", {"entity_id": "sensor.temp"})
-        assert result == Decision.ALLOW
+        assert result.decision == Decision.ALLOW
 
     def test_ask_rule_when_no_deny_or_allow(self, ha_registry):
         perms = self._make_permissions(
@@ -125,7 +125,7 @@ class TestPermissionEngine:
                 "entity_id": "light.bedroom",
             },
         )
-        assert result == Decision.ASK
+        assert result.decision == Decision.ASK
 
     def test_falls_through_to_defaults(self, ha_registry):
         perms = self._make_permissions(
@@ -136,7 +136,7 @@ class TestPermissionEngine:
         )
         engine = PermissionEngine(perms, registry=ha_registry)
         result = engine.evaluate("ha_get_state", {"entity_id": "sensor.temp"})
-        assert result == Decision.ALLOW
+        assert result.decision == Decision.ALLOW
 
     def test_defaults_first_match_wins(self, ha_registry):
         perms = self._make_permissions(
@@ -154,13 +154,13 @@ class TestPermissionEngine:
                 "entity_id": "light.bedroom",
             },
         )
-        assert result == Decision.ASK
+        assert result.decision == Decision.ASK
 
     def test_global_fallback_is_ask(self):
         perms = self._make_permissions()  # No rules, no defaults
         engine = PermissionEngine(perms)
         result = engine.evaluate("unknown_tool", {"key": "value"})
-        assert result == Decision.ASK
+        assert result.decision == Decision.ASK
 
     def test_deny_overrides_more_specific_allow(self, ha_registry):
         # Broad deny + specific allow → deny wins
@@ -179,7 +179,7 @@ class TestPermissionEngine:
                 "entity_id": "lock.front_door",
             },
         )
-        assert result == Decision.DENY
+        assert result.decision == Decision.DENY
 
     def test_rules_checked_before_defaults(self, ha_registry):
         perms = self._make_permissions(
@@ -188,7 +188,7 @@ class TestPermissionEngine:
         )
         engine = PermissionEngine(perms, registry=ha_registry)
         result = engine.evaluate("ha_get_state", {"entity_id": "sensor.temp"})
-        assert result == Decision.ALLOW
+        assert result.decision == Decision.ALLOW
 
     def test_no_args_tool_matching(self, ha_registry):
         perms = self._make_permissions(
@@ -196,7 +196,7 @@ class TestPermissionEngine:
         )
         engine = PermissionEngine(perms, registry=ha_registry)
         result = engine.evaluate("ha_get_states", {})
-        assert result == Decision.ALLOW
+        assert result.decision == Decision.ALLOW
 
     def test_ha_fire_event_deny_default(self, ha_registry):
         perms = self._make_permissions(
@@ -204,7 +204,7 @@ class TestPermissionEngine:
         )
         engine = PermissionEngine(perms, registry=ha_registry)
         result = engine.evaluate("ha_fire_event", {"event_type": "test_event"})
-        assert result == Decision.DENY
+        assert result.decision == Decision.DENY
 
 
 # --- Registry-aware tests ---
@@ -263,7 +263,7 @@ class TestBuildSignatureWithRegistry:
             },
             registry=ha_registry,
         )
-        assert sig == "ha_call_service(homeassistant.restart, )"
+        assert sig == "ha_call_service(homeassistant.restart)"
 
     def test_ha_call_service_field_order_irrelevant(self, ha_registry):
         sig1 = build_signature(
@@ -335,18 +335,19 @@ class TestValidateArgsWithRegistry:
             registry=ha_registry,
         )
 
-    def test_non_string_args_skip_validation(self, ha_registry):
-        """Non-string arg values should be skipped by all validators."""
-        validate_args(
-            "ha_call_service",
-            {
-                "domain": "light",
-                "service": "turn_on",
-                "entity_id": "light.bedroom",
-                "brightness": 255,
-            },
-            registry=ha_registry,
-        )
+    def test_undeclared_args_rejected(self, ha_registry):
+        """Args not declared in the tool YAML are rejected."""
+        with pytest.raises(ValueError, match="Unknown argument: color_mode"):
+            validate_args(
+                "ha_call_service",
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    "entity_id": "light.bedroom",
+                    "color_mode": "x",
+                },
+                registry=ha_registry,
+            )
 
 
 class TestPermissionEngineWithRegistry:
@@ -369,4 +370,4 @@ class TestPermissionEngineWithRegistry:
         )
         engine = PermissionEngine(perms, registry=ha_registry)
         result = engine.evaluate("ha_get_state", {"entity_id": "sensor.temp"})
-        assert result == Decision.ALLOW
+        assert result.decision == Decision.ALLOW

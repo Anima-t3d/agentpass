@@ -7,10 +7,29 @@ import contextlib
 import json
 
 import websockets
+from websockets.asyncio.client import unix_connect
 
 # ---------------------------------------------------------------------------
 # Error hierarchy
 # ---------------------------------------------------------------------------
+
+
+UNIX_SCHEME = "unix://"
+
+
+def socket_url(path: str) -> str:
+    """The client URL for a Unix socket path (``--socket PATH``)."""
+    return f"{UNIX_SCHEME}{path}"
+
+
+async def _open(url: str) -> websockets.ClientConnection:
+    """Open the WebSocket; ``unix:///path/to.sock`` connects over a Unix socket (plaintext)."""
+    if url.startswith(UNIX_SCHEME):
+        path = url[len(UNIX_SCHEME) :]
+        if not path.startswith("/"):
+            raise OSError(f"unix URL needs an absolute socket path: {url!r}")
+        return await unix_connect(path, "ws://localhost/")
+    return await websockets.connect(url)
 
 
 class AgentPassError(Exception):
@@ -70,7 +89,7 @@ class AgentPassClient:
 
     async def connect(self) -> None:
         """Connect to gateway and authenticate."""
-        self._ws = await websockets.connect(self.url)
+        self._ws = await _open(self.url)
         await self._authenticate()
         self._connected.set()
         self._reader_task = asyncio.create_task(self._read_loop())
@@ -307,7 +326,7 @@ class AgentPassClient:
                 await self._backoff_sleep(delay)
                 if self._closed:
                     return
-                self._ws = await websockets.connect(self.url)
+                self._ws = await _open(self.url)
                 await self._authenticate()
                 self._connected.set()
                 # Auto-fetch pending results

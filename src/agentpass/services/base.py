@@ -23,3 +23,10 @@ class ServiceHandler(ABC):
     async def close(self) -> None:
         """Clean up resources."""
         ...
+
+
+class ServiceUnauthorizedError(Exception):
+    """The service's credentials need owner action (e.g. OAuth consent).
+
+    Carries no upstream detail; the pipeline reports a fixed message.
+    """

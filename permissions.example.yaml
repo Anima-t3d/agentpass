@@ -7,6 +7,16 @@ defaults:
     action: allow
   - pattern: "ha_call_service*"
     action: ask
+  # GitHub (tools/github.yaml): reads allow, writes ask.
+  # These rules only match when the `github` service is enabled in gateway.yaml.
+  # `config.example.yaml` ships it commented out, so `agentpass check-config`
+  # correctly warns "matches no tool in the registry" until you enable it.
+  - pattern: "gh_get_*"
+    action: allow
+  - pattern: "gh_list_*"
+    action: allow
+  - pattern: "gh_*"
+    action: ask
   - pattern: "*"
     action: ask
 
@@ -23,3 +33,24 @@ rules:
   - pattern: "ha_fire_event(*)"
     action: deny
     description: "Event firing is always denied"
+
+  # GitHub: destructive or security-sensitive actions are always denied
+  - pattern: "gh_delete_*"
+    action: deny
+    description: "Deleting repositories is always denied"
+
+  - pattern: "gh_update_branch_protection*"
+    action: deny
+    description: "Branch protection changes are always denied"
+
+  - pattern: "gh_add_collaborator*"
+    action: deny
+    description: "Adding collaborators is always denied"
+
+  - pattern: "gh_*_deploy_key*"
+    action: deny
+    description: "Deploy keys are credentials"
+
+  - pattern: "gh_set_actions_secret*"
+    action: deny
+    description: "Actions secrets are credentials"

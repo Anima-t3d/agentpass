@@ -149,12 +149,12 @@ class TestToolRegistrySignatureParts:
         parts = registry.get_signature_parts("unknown_tool", {"a": "1"})
         assert parts is None
 
-    def test_get_signature_parts_missing_arg_uses_empty_string(self, registry):
+    def test_get_signature_parts_missing_arg_is_absent(self, registry):
         parts = registry.get_signature_parts(
             "ha_call_service",
             {"domain": "light", "service": "turn_on"},
         )
-        assert parts == ["light.turn_on", ""]
+        assert parts == ["light.turn_on"]
 
 
 class TestToolRegistryArgValidators:

@@ -162,7 +162,7 @@ class TestGenericHTTPServiceCallService:
         body = call_kwargs["json"]
         assert body["entity_id"] == "light.bedroom"
         assert body["brightness"] == 128
-        assert body["color_name"] == "blue"
+        assert "color_name" not in body  # undeclared args are never forwarded
         # domain and service should NOT be in the body
         assert "domain" not in body
         assert "service" not in body
@@ -461,9 +461,9 @@ class TestGenericHTTPServiceMisc:
         assert result == "/api/services/light/turn_on"
 
     async def test_path_interpolation_missing_key(self):
-        """Missing key in args results in empty string substitution."""
-        result = GenericHTTPService._interpolate_path("/api/states/{entity_id}", {})
-        assert result == "/api/states/"
+        """Missing key in args is an error, not an empty segment."""
+        with pytest.raises(HTTPServiceError):
+            GenericHTTPService._interpolate_path("/api/states/{entity_id}", {})
 
     async def test_body_no_exclude(self):
         """All args appear in body when no body_exclude is set."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,9 @@ from urllib.parse import urlencode
 import jinja2
 from aiohttp import web
 
+from agentpass.dashboard.remembered_routes import setup_remembered
 from agentpass.db import Database
+from agentpass.remembered import RememberedService
 
 logger = logging.getLogger("agentpass.dashboard")
 
@@ -150,7 +153,43 @@ def _format_ts(epoch: float) -> str:
         return str(epoch)
 
 
-def setup_dashboard(app: web.Application, db: Database) -> None:
+def admin_token_middleware(admin_token: str):
+    """Require ``Authorization: Bearer <admin token>`` (constant-time compare) on every route.
+
+    Only the admin token passes: an agent token, even a valid one, gets 401.
+    """
+    expected = admin_token.encode()
+
+    @web.middleware
+    async def _auth(request: web.Request, handler):
+        header = request.headers.get("Authorization", "")
+        scheme, _, presented = header.partition(" ")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            presented.strip().encode(), expected
+        ):
+            return web.json_response(
+                {"error": "unauthorized"}, status=401, headers={"WWW-Authenticate": "Bearer"}
+            )
+        return await handler(request)
+
+    return _auth
+
+
+def build_dashboard_app(
+    db: Database, admin_token: str | None = None, remembered: RememberedService | None = None
+) -> web.Application:
+    """An app that serves only the audit dashboard; with a token, every route requires it."""
+    if admin_token is not None and not admin_token:
+        raise ValueError("admin_token must not be empty")
+    middlewares = [admin_token_middleware(admin_token)] if admin_token else []
+    app = web.Application(middlewares=middlewares)
+    setup_dashboard(app, db, remembered)
+    return app
+
+
+def setup_dashboard(
+    app: web.Application, db: Database, remembered: RememberedService | None = None
+) -> None:
     """Register dashboard routes on an aiohttp Application."""
     app[_db_key] = db
 
@@ -164,3 +203,5 @@ def setup_dashboard(app: web.Application, db: Database) -> None:
     app.router.add_get("/audit/", handle_audit_page)
     app.router.add_get("/audit/api/log", handle_api_log)
     app.router.add_get("/audit/api/stats", handle_api_stats)
+    if remembered is not None:
+        setup_remembered(app, remembered, env)

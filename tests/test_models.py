@@ -8,7 +8,6 @@ from agentpass.models import (
     Decision,
     PendingApproval,
     ToolRequest,
-    ToolResult,
 )
 
 
@@ -40,18 +39,6 @@ class TestToolRequest:
         assert isinstance(req.args, dict)
 
 
-class TestToolResult:
-    def test_construction(self):
-        result = ToolResult(request_id="req-1", status="executed", data={"state": "on"})
-        assert result.request_id == "req-1"
-        assert result.status == "executed"
-        assert result.data == {"state": "on"}
-
-    def test_data_default_none(self):
-        result = ToolResult(request_id="req-1", status="denied")
-        assert result.data is None
-
-
 class TestPendingApproval:
     def test_construction(self):
         req = ToolRequest(id="req-1", tool_name="test", args={})
@@ -70,8 +57,7 @@ class TestPendingApproval:
         loop = asyncio.new_event_loop()
         future = loop.create_future()
         pending = PendingApproval(request=req, future=future)
-        assert pending.message_id is None
-        assert pending.timeout_task is None
+        assert pending.future is future
         assert pending.expires_at == 0
         loop.close()
 

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
-import time
-import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from websockets.exceptions import ConnectionClosed
@@ -15,16 +14,30 @@ from websockets.exceptions import ConnectionClosed
 if TYPE_CHECKING:
     from agentpass.registry import ToolRegistry
 
+from agentpass.agents import AgentIdentity, AgentRegistry
+from agentpass.approval import ApprovalCoordinator, ApprovalReason
 from agentpass.db import Database
-from agentpass.engine import PermissionEngine, build_signature, validate_args
-from agentpass.executor import ExecutionError, Executor
-from agentpass.messenger.base import (
-    ApprovalChoice,
-    ApprovalRequest,
-    ApprovalResult,
-    MessengerAdapter,
+from agentpass.engine import PermissionEngine
+from agentpass.executor import Executor
+from agentpass.models import PendingApproval
+from agentpass.pipeline import (
+    ApprovalDenied,
+    ApprovalTimeout,
+    ApprovalUnavailable,
+    ExecutionFailed,
+    InvalidParams,
+    Outcome,
+    Pipeline,
+    PipelineError,
+    PolicyDenied,
+    RateLimited,
+    RateLimiter,
+    ServiceUnauthorized,
+    UnknownTool,
 )
-from agentpass.models import AuditEntry, Decision, PendingApproval, ToolRequest
+from agentpass.schema import args_to_json_schema, tool_annotations
+
+__all__ = ["GatewayServer", "RateLimiter"]
 
 logger = logging.getLogger(__name__)
 
@@ -38,31 +51,35 @@ POLICY_DENIED = -32003
 EXECUTION_FAILED = -32004
 NOT_AUTHENTICATED = -32005
 RATE_LIMIT_EXCEEDED = -32006
+UNKNOWN_TOOL = -32007
+APPROVAL_UNAVAILABLE = -32008
+SERVICE_UNAUTHORIZED = -32009
+INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
 
+LEGACY_AGENT_ID = "default"  # identity of the single configured agent.token
 AUTH_TIMEOUT = 10  # seconds
 
+# The one place pipeline errors become JSON-RPC codes.
+ERROR_CODES: dict[type[PipelineError], int] = {
+    UnknownTool: UNKNOWN_TOOL,
+    InvalidParams: INVALID_PARAMS,
+    PolicyDenied: POLICY_DENIED,
+    ApprovalDenied: APPROVAL_DENIED,
+    ApprovalTimeout: APPROVAL_TIMEOUT,
+    ApprovalUnavailable: APPROVAL_UNAVAILABLE,
+    RateLimited: RATE_LIMIT_EXCEEDED,
+    ExecutionFailed: EXECUTION_FAILED,
+    ServiceUnauthorized: SERVICE_UNAUTHORIZED,
+}
 
-def _epoch_to_iso(epoch: float) -> str:
-    """Convert epoch float to ISO 8601 string."""
-    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+@dataclass
+class ConnectionContext:
+    """Per-connection state: who is connected and over which socket."""
 
-class RateLimiter:
-    """Sliding-window rate limiter."""
-
-    def __init__(self, max_per_minute: int) -> None:
-        self._max = max_per_minute
-        self._timestamps: list[float] = []
-
-    def check(self) -> bool:
-        """Return True if request is allowed, False if rate limited."""
-        now = time.monotonic()
-        # Remove timestamps older than 60 seconds
-        self._timestamps = [t for t in self._timestamps if now - t < 60]
-        if len(self._timestamps) >= self._max:
-            return False
-        self._timestamps.append(now)
-        return True
+    identity: AgentIdentity
+    websocket: Any
 
 
 class GatewayServer:
@@ -71,38 +88,66 @@ class GatewayServer:
     def __init__(
         self,
         *,
-        agent_token: str,
+        agent_token: str | None = None,
+        agents: AgentRegistry | None = None,
         engine: PermissionEngine,
         executor: Executor,
-        messenger: MessengerAdapter,
+        coordinator: ApprovalCoordinator,
         db: Database,
         approval_timeout: int = 900,
         rate_limit_config: Any = None,
         registry: ToolRegistry | None = None,
         services: dict[str, Any] | None = None,
+        remembered: Any = None,
     ) -> None:
-        self._agent_token = agent_token
-        self._engine = engine
-        self._executor = executor
-        self._messenger = messenger
+        if agent_token is None and agents is None:
+            raise ValueError("Either agent_token or agents is required")
+        if agent_token is not None and agents is not None:
+            raise ValueError("agent_token and agents are mutually exclusive")
+        self._agents = agents
+        # One shared token = one identity, one session at a time (unchanged behaviour)
+        self._legacy_token = agent_token
+        self._legacy_identity = AgentIdentity(id=LEGACY_AGENT_ID, max_sessions=1)
+        self._sessions: dict[str, int] = {}
+        self._coordinator = coordinator
         self._db = db
-        self._approval_timeout = approval_timeout
         self._registry = registry
         self._services = services or {}
-        self._rate_limiter = RateLimiter(
-            rate_limit_config.max_requests_per_minute if rate_limit_config else 60
+        self._pipeline = Pipeline(
+            engine=engine,
+            executor=executor,
+            coordinator=coordinator,
+            db=db,
+            approval_timeout=approval_timeout,
+            max_requests_per_minute=(
+                rate_limit_config.max_requests_per_minute if rate_limit_config else 60
+            ),
+            max_pending=rate_limit_config.max_pending_approvals if rate_limit_config else 10,
+            registry=registry,
+            remembered=remembered,
         )
-        self._max_pending = rate_limit_config.max_pending_approvals if rate_limit_config else 10
-        self._pending: dict[str, PendingApproval] = {}  # request_id -> PendingApproval
-        self._background_tasks: set[asyncio.Task] = set()  # prevent GC of bg tasks
-        self._agent_connected = False
-        self._agent_ws: Any = None  # Current WebSocket connection
-        self._resolve_lock = asyncio.Lock()
+
+    @property
+    def pipeline(self) -> Pipeline:
+        return self._pipeline
+
+    @property
+    def _engine(self) -> PermissionEngine:
+        return self._pipeline._engine
+
+    @_engine.setter
+    def _engine(self, engine: PermissionEngine) -> None:
+        self._pipeline._engine = engine
+
+    @property
+    def _pending(self) -> dict[str, PendingApproval]:
+        return self._pipeline._pending
 
     async def health_status(self) -> dict[str, Any]:
         """Return health status of all components."""
         db_ok = await self._db.health_check()
-        telegram_ok = await self._messenger.health_check()
+        channels = await self._coordinator.health_check()
+        telegram_ok = all(channels.values())
         services_status = {}
         for name, svc in self._services.items():
             services_status[name] = await svc.health_check()
@@ -113,30 +158,34 @@ class GatewayServer:
             "checks": {
                 "database": db_ok,
                 "telegram": telegram_ok,
+                "channels": channels,
                 "services": services_status,
             },
         }
 
     async def handle_connection(self, websocket: Any) -> None:
         """Handle a single agent WebSocket connection."""
-        if self._agent_connected:
-            await websocket.close(4000, "Another agent is already connected")
-            return
-
-        self._agent_connected = True
-        self._agent_ws = websocket
-        logger.info("Agent connected")
-
+        ctx: ConnectionContext | None = None
         try:
-            # Phase 1: Authentication with deadline
-            authenticated = await self._authenticate(websocket)
-            if not authenticated:
+            # Phase 1: Authentication with deadline (no session counted, so an
+            # unauthenticated connection cannot lock out a real agent)
+            identity = await self._authenticate(websocket)
+            if identity is None:
                 return
+
+            # Count the session only after auth (no await between check and set)
+            held = self._sessions.get(identity.id, 0)
+            if identity.max_sessions is not None and held >= identity.max_sessions:
+                await websocket.close(4000, "Another agent is already connected")
+                return
+            self._sessions[identity.id] = held + 1
+            ctx = ConnectionContext(identity=identity, websocket=websocket)
+            logger.info("Agent %s connected", identity.id)
 
             # Phase 2: Message loop — each message gets its own task
             tasks: set[asyncio.Task] = set()
             async for raw_message in websocket:
-                task = asyncio.create_task(self._handle_message(websocket, raw_message))
+                task = asyncio.create_task(self._handle_message(ctx, raw_message))
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
 
@@ -146,49 +195,76 @@ class GatewayServer:
         except ConnectionClosed:
             logger.info("Agent disconnected")
         finally:
-            self._agent_connected = False
-            self._agent_ws = None
-            logger.info("Agent session ended")
+            if ctx is not None:
+                remaining = self._sessions.get(ctx.identity.id, 1) - 1
+                if remaining > 0:
+                    self._sessions[ctx.identity.id] = remaining
+                else:
+                    self._sessions.pop(ctx.identity.id, None)
+                logger.info("Agent %s session ended", ctx.identity.id)
 
-    async def _authenticate(self, websocket: Any) -> bool:
-        """Handle auth flow. Returns True if authenticated."""
+    def _resolve_identity(self, token: Any) -> AgentIdentity | None:
+        if self._agents is not None:
+            return self._agents.authenticate(token)
+        if (
+            self._legacy_token is not None
+            and isinstance(token, str)
+            and hmac.compare_digest(token.encode(), self._legacy_token.encode())
+        ):
+            return self._legacy_identity
+        return None
+
+    async def _authenticate(self, websocket: Any) -> AgentIdentity | None:
+        """Handle auth flow. Returns the agent identity, or None on failure."""
         try:
             raw = await asyncio.wait_for(websocket.recv(), timeout=AUTH_TIMEOUT)
         except TimeoutError:
             await self._send_error(websocket, NOT_AUTHENTICATED, "Authentication timeout", None)
             await websocket.close()
-            return False
+            return None
 
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
             await self._send_error(websocket, PARSE_ERROR, "Parse error", None)
             await websocket.close()
-            return False
+            return None
 
-        if msg.get("method") != "auth":
-            await self._send_error(websocket, NOT_AUTHENTICATED, "Not authenticated", msg.get("id"))
+        if not isinstance(msg, dict) or msg.get("method") != "auth":
+            await self._send_error(
+                websocket,
+                NOT_AUTHENTICATED,
+                "Not authenticated",
+                msg.get("id") if isinstance(msg, dict) else None,
+            )
             await websocket.close()
-            return False
+            return None
 
-        token = msg.get("params", {}).get("token", "")
-        if token != self._agent_token:
+        params = msg.get("params")
+        token = params.get("token", "") if isinstance(params, dict) else ""
+        identity = self._resolve_identity(token)
+        if identity is None:
             await self._send_error(websocket, NOT_AUTHENTICATED, "Invalid token", msg.get("id"))
             await websocket.close()
-            return False
+            return None
 
         # Auth success
         await self._send_result(websocket, {"status": "authenticated"}, msg.get("id"))
-        logger.info("Agent authenticated")
-        return True
+        logger.info("Agent %s authenticated", identity.id)
+        return identity
 
-    async def _handle_message(self, websocket: Any, raw_message: str) -> None:
+    async def _handle_message(self, ctx: ConnectionContext, raw_message: str) -> None:
         """Process a single JSON-RPC message."""
+        websocket = ctx.websocket
         # Parse
         try:
             msg = json.loads(raw_message)
         except json.JSONDecodeError:
             await self._send_error(websocket, PARSE_ERROR, "Parse error", None)
+            return
+
+        if not isinstance(msg, dict):
+            await self._send_error(websocket, INVALID_REQUEST, "Invalid request", None)
             return
 
         msg_id = msg.get("id")
@@ -198,259 +274,81 @@ class GatewayServer:
             await self._send_error(websocket, INVALID_REQUEST, "Missing method", msg_id)
             return
 
-        if method == "tool_request":
-            await self._handle_tool_request(websocket, msg, msg_id)
-        elif method == "get_pending_results":
-            await self._handle_get_pending_results(websocket, msg_id)
-        elif method == "list_tools":
-            await self._handle_list_tools(websocket, msg_id)
-        else:
-            await self._send_error(websocket, METHOD_NOT_FOUND, f"Unknown method: {method}", msg_id)
+        try:
+            if method == "tool_request":
+                await self._handle_tool_request(ctx, msg, msg_id)
+            elif method == "get_pending_results":
+                await self._handle_get_pending_results(ctx, msg_id)
+            elif method == "list_tools":
+                await self._handle_list_tools(websocket, msg_id)
+            else:
+                await self._send_error(
+                    websocket, METHOD_NOT_FOUND, f"Unknown method: {method}", msg_id
+                )
+        except ConnectionClosed:
+            raise
+        except Exception:
+            # Never leave a request unanswered
+            logger.exception("Unhandled error processing %s", method)
+            await self._send_error(websocket, INTERNAL_ERROR, "Internal error", msg_id)
 
-    async def _handle_tool_request(self, websocket: Any, msg: dict, msg_id: Any) -> None:
+    async def _handle_tool_request(self, ctx: ConnectionContext, msg: dict, msg_id: Any) -> None:
         """Process a tool_request."""
+        websocket = ctx.websocket
         # Validate msg_id is present (Major 1: prevents None collisions)
         if msg_id is None:
             await self._send_error(websocket, INVALID_REQUEST, "Missing request id", None)
             return
 
         params = msg.get("params", {})
+        if not isinstance(params, dict):
+            await self._send_error(websocket, INVALID_PARAMS, "Params must be an object", msg_id)
+            return
         tool_name = params.get("tool")
         args = params.get("args", {})
 
-        if not tool_name:
+        if not tool_name or not isinstance(tool_name, str):
             await self._send_error(websocket, INVALID_REQUEST, "Missing tool name", msg_id)
             return
 
-        # Rate limit check (before engine)
-        if not self._rate_limiter.check():
-            await self._send_error(websocket, RATE_LIMIT_EXCEEDED, "Rate limit exceeded", msg_id)
-            return
-
-        # Validate args
+        result: Outcome | PipelineError
         try:
-            validate_args(tool_name, args)
-        except ValueError as e:
-            await self._send_error(websocket, INVALID_REQUEST, str(e), msg_id)
-            return
+            result = await self._pipeline.process(ctx.identity, tool_name, args)
+        except PipelineError as e:
+            result = e
 
-        # Build signature
-        signature = build_signature(tool_name, args)
-
-        # Generate unique request ID (decoupled from client msg_id)
-        request_id = str(uuid.uuid4())
-
-        # Create tool request
-        request = ToolRequest(id=request_id, tool_name=tool_name, args=args, signature=signature)
-
-        # Evaluate permission
-        decision = self._engine.evaluate(tool_name, args)
-
-        # Log audit (initial decision)
-        audit = AuditEntry(
-            request_id=request_id,
-            tool_name=tool_name,
-            args=args,
-            signature=signature,
-            decision=decision.value,
-        )
-        await self._db.log_audit(audit)
-
-        if decision == Decision.ALLOW:
-            await self._execute_and_respond(websocket, request, msg_id)
-        elif decision == Decision.DENY:
-            await self._send_error(websocket, POLICY_DENIED, "Denied by policy", msg_id)
-        elif decision == Decision.ASK:
-            # Check pending limit
-            if len(self._pending) >= self._max_pending:
-                await self._send_error(
-                    websocket, RATE_LIMIT_EXCEEDED, "Too many pending approvals", msg_id
-                )
-                return
-            await self._request_approval(websocket, request, msg_id)
-
-    async def _execute_and_respond(
-        self, websocket: Any, request: ToolRequest, msg_id: Any
-    ) -> dict[str, Any] | None:
-        """Execute a tool and send the result. Returns result data or None on error."""
         try:
-            result_data = await self._executor.execute(request.tool_name, request.args)
-            await self._send_result(websocket, {"status": "executed", "data": result_data}, msg_id)
-            return result_data
-        except ExecutionError as e:
-            await self._send_error(websocket, EXECUTION_FAILED, str(e), msg_id)
-            return None
-        except Exception:
-            logger.exception("Unexpected error executing %s", request.tool_name)
-            await self._send_error(websocket, EXECUTION_FAILED, "Internal execution error", msg_id)
-            return None
-
-    async def _request_approval(self, websocket: Any, request: ToolRequest, msg_id: Any) -> None:
-        """Send approval request to messenger and wait for response."""
-        request_id = request.id
-
-        # Store in DB
-        expires_at_epoch = time.time() + self._approval_timeout
-        expires_at_iso = _epoch_to_iso(expires_at_epoch)
-        await self._db.insert_pending(
-            request_id=request_id,
-            tool_name=request.tool_name,
-            args=request.args,
-            signature=request.signature,
-            expires_at=expires_at_iso,
-        )
-
-        # Send to messenger
-        approval_req = ApprovalRequest(
-            request_id=request_id,
-            tool_name=request.tool_name,
-            args=request.args,
-            signature=request.signature,
-        )
-        choices = [
-            ApprovalChoice(label="Allow", action="allow"),
-            ApprovalChoice(label="Deny", action="deny"),
-        ]
-        message_id = await self._messenger.send_approval(approval_req, choices)
-
-        # Create future and pending approval
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[ApprovalResult] = loop.create_future()
-        pending = PendingApproval(
-            request=request,
-            future=future,
-            message_id=message_id,
-            expires_at=expires_at_epoch,
-        )
-        self._pending[request_id] = pending
-
-        # Critical 2: Schedule timeout via messenger
-        if hasattr(self._messenger, "schedule_timeout"):
-            self._messenger.schedule_timeout(request_id, self._approval_timeout, message_id)
-
-        # Wait for resolution
-        try:
-            result = await future
-
-            # Major 5: Update audit log with resolution
-            resolution = self._resolution_label(result)
-
-            if result.action == "allow":
-                exec_result = await self._execute_and_respond(websocket, request, msg_id)
-                await self._db.update_audit_resolution(
-                    request_id=request_id,
-                    resolution=resolution,
-                    resolved_by=result.user_id,
-                    resolved_at=result.timestamp,
-                    execution_result=exec_result,
+            if isinstance(result, Outcome):
+                await self._send_result(
+                    websocket, {"status": "executed", "data": result.data}, msg_id
                 )
             else:
-                await self._db.update_audit_resolution(
-                    request_id=request_id,
-                    resolution=resolution,
-                    resolved_by=result.user_id,
-                    resolved_at=result.timestamp,
-                )
-                error_code = APPROVAL_TIMEOUT if result.user_id == "timeout" else APPROVAL_DENIED
-                error_msg = (
-                    "Approval timed out" if result.user_id == "timeout" else "Denied by user"
-                )
-                await self._send_error(websocket, error_code, error_msg, msg_id)
-
-            # Agent received the response, clean up DB
-            self._pending.pop(request_id, None)
-            await self._db.delete_pending(request_id)
-
+                code = next(ERROR_CODES[c] for c in type(result).__mro__ if c in ERROR_CODES)
+                await self._send_error(websocket, code, result.message, msg_id)
         except ConnectionClosed:
-            # Agent disconnected while waiting — keep pending in DB for offline retrieval
-            logger.info("Agent disconnected while awaiting approval for %s", request_id)
-            self._pending.pop(request_id, None)
+            # Agent gone: keep the result for get_pending_results
+            if result.awaiting_delivery:
+                await self._pipeline.store_undelivered(result.request_id, result)
+            raise
+        if result.awaiting_delivery:
+            await self._pipeline.complete(result.request_id)
 
-            # Wait for the future to resolve (approval may still come in)
-            if not future.done():
-                # Create a background task to handle the resolution after disconnect
-                bg_task = asyncio.create_task(
-                    self._handle_offline_resolution(request_id, request, future)
-                )
-                self._background_tasks.add(bg_task)
-                bg_task.add_done_callback(self._background_tasks.discard)
-            else:
-                # Future already resolved while disconnect was being handled
-                result = future.result()
-                await self._store_offline_result(request_id, request, result)
-
-    async def _handle_offline_resolution(
-        self,
-        request_id: str,
-        request: ToolRequest,
-        future: asyncio.Future[ApprovalResult],
+    async def resolve_all_pending(
+        self, reason: ApprovalReason = ApprovalReason.GATEWAY_SHUTDOWN
     ) -> None:
-        """Handle approval resolution after agent disconnected."""
-        try:
-            result = await future
-            await self._store_offline_result(request_id, request, result)
-        except asyncio.CancelledError:
-            # Gateway shutting down — clean up
-            await self._db.delete_pending(request_id)
-        except Exception:
-            logger.exception("Error handling offline resolution for %s", request_id)
-            await self._db.delete_pending(request_id)
+        """Resolve all pending approvals (called during shutdown)."""
+        await self._pipeline.resolve_all_pending(reason)
 
-    async def _store_offline_result(
-        self,
-        request_id: str,
-        request: ToolRequest,
-        result: ApprovalResult,
-    ) -> None:
-        """Execute tool (if approved) and store the result in DB for later retrieval."""
-        resolution = self._resolution_label(result)
-
-        # Update audit
-        await self._db.update_audit_resolution(
-            request_id=request_id,
-            resolution=resolution,
-            resolved_by=result.user_id,
-            resolved_at=result.timestamp,
-        )
-
-        if result.action == "allow":
-            try:
-                exec_data = await self._executor.execute(request.tool_name, request.args)
-                result_json = json.dumps({"status": "executed", "data": exec_data})
-            except Exception:
-                logger.exception("Offline execution failed for %s", request_id)
-                result_json = json.dumps({"status": "error", "data": "Execution failed"})
-        else:
-            reason = "Approval timed out" if result.user_id == "timeout" else "Denied by user"
-            result_json = json.dumps({"status": "denied", "data": reason})
-
-        await self._db.update_pending_result(request_id, result_json)
-
-    @staticmethod
-    def _resolution_label(result: ApprovalResult) -> str:
-        """Map an ApprovalResult to a human-readable resolution label."""
-        if result.user_id == "timeout":
-            return "timed_out"
-        return "approved" if result.action == "allow" else "denied"
-
-    async def resolve_approval(self, result: ApprovalResult) -> None:
-        """Called by messenger when a human approves/denies or timeout fires."""
-        async with self._resolve_lock:
-            request_id = result.request_id
-            pending = self._pending.get(request_id)
-
-            if pending and not pending.future.done():
-                pending.future.set_result(result)
-
-    async def _handle_get_pending_results(self, websocket: Any, msg_id: Any) -> None:
-        """Return any stored results from approvals resolved while agent was disconnected."""
-        results = await self._db.get_completed_results()
-        await self._send_result(websocket, {"results": results}, msg_id)
+    async def _handle_get_pending_results(self, ctx: ConnectionContext, msg_id: Any) -> None:
+        """Return this agent's stored results from approvals resolved while it was away."""
+        agent_id = ctx.identity.id
+        results = await self._db.get_completed_results(agent_id)
+        await self._send_result(ctx.websocket, {"results": results}, msg_id)
 
         # Clean up retrieved results from DB
         if results:
             request_ids = [r["request_id"] for r in results]
-            await self._db.delete_completed_results(request_ids)
+            await self._db.delete_completed_results(request_ids, agent_id)
 
     async def _handle_list_tools(self, websocket: Any, msg_id: Any) -> None:
         """Return available tool definitions."""
@@ -473,22 +371,13 @@ class GatewayServer:
                     "description": tool_def.description,
                     "service": tool_def.service_name,
                     "args": args_schema,
+                    "inputSchema": args_to_json_schema(tool_def.args),
+                    "annotations": tool_annotations(tool_def),
+                    "risk": tool_def.risk,
                 }
             )
 
         await self._send_result(websocket, {"tools": tools}, msg_id)
-
-    async def resolve_all_pending(self, reason: str = "gateway_shutdown") -> None:
-        """Resolve all pending approvals (called during shutdown)."""
-        for request_id, pending in list(self._pending.items()):
-            if not pending.future.done():
-                result = ApprovalResult(
-                    request_id=request_id,
-                    action="deny",
-                    user_id=reason,
-                    timestamp=time.time(),
-                )
-                pending.future.set_result(result)
 
     # --- JSON-RPC helpers ---
 

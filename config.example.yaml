@@ -1,17 +1,66 @@
 # agentpass configuration
 # Copy to config.yaml and fill in values
 
+# Agent API listeners. Default: a Unix socket, mode 0660, group agentpass-clients (the service
+# user must be a member), so access is limited by group membership on top of the agent token.
+# The path matches RuntimeDirectory=agentpass in the systemd unit. Plaintext over the socket is
+# fine: no TLS and no --insecure needed. A stale socket file is removed on start.
+listen:
+  socket: /run/agentpass/agent.sock
+  group: agentpass-clients
+  # Audit dashboard: its own Unix socket, never TCP, never the agent group. Operator access:
+  #   sudo -u agentpass curl --unix-socket /run/agentpass/admin.sock http://x/audit/api/log
+  # admin_socket: /run/agentpass/admin.sock     # null disables the dashboard
+  # admin_group: agentpass-admin
+  # Opt-in TCP dashboard (loopback only, bearer admin token required; check-config warns):
+  # dashboard_tcp: {host: "127.0.0.1", port: 8207, admin_token: "${ADMIN_TOKEN}"}
+  # Optional TCP (needs TLS below, or --insecure for plaintext). Loopback only: 0.0.0.0 and ::
+  # are refused unless you add allow_wildcard: true. check-config warns if TCP is on without
+  # the socket.
+  # tcp:
+  #   host: "127.0.0.1"
+  #   port: 8205
+  #   allow_wildcard: false
+
 gateway:
-  host: "0.0.0.0"
-  port: 8443
-  # health_port: 8080           # HTTP health endpoint port (default 8080)
-  # health_host: "127.0.0.1"   # Bind address for health/dashboard (default 127.0.0.1)
-  tls:
-    cert: "/path/to/cert.pem"    # required unless --insecure
-    key: "/path/to/key.pem"
+  # host/port are only read when there is no listen block (old shape: one TCP listener, and
+  # the same wildcard refusal applies). With the listen block above, leave them out.
+  # /healthz (no data) is off unless a port is set.
+  # reserved_ports: ports other software on this host owns (e.g. [8080, 3306]). check-config
+  # errors if health_port or the dashboard TCP port is one of them. Default: none.
+  # reserved_ports: []
+  # health_port: 8210
+  # health_host: "127.0.0.1"   # Bind address for /healthz (default 127.0.0.1)
+  # tls:                           # for listen.tcp; required there unless --insecure
+  #   cert: "/path/to/cert.pem"
+  #   key: "/path/to/key.pem"
 
 agent:
   token: "${AGENT_TOKEN}"
+  # Per-agent identities REPLACE the shared token (setting both is a config error):
+  #   agentpass agent create my-agent --config config.yaml   # writes <config dir>/agents; prints the token once
+  # agents_dir: agents      # agents/NAME.yaml: id, token_hash, rate_limit, rules, extends
+  # policy_dir: policy      # policy/_floor.yaml (denies no agent can override) + shared sets
+
+# MCP frontend (streamable HTTP, POST /mcp, Bearer agp_<id>_<secret>). Needs agent.agents_dir.
+# Own app and port, loopback only, never the healthz or dashboard app.
+# By default it listens on loopback TCP; set socket to use a Unix socket instead (same mode and
+# group as listen.group, so curl --unix-socket /run/agentpass/mcp.sock http://gateway/mcp works).
+# mcp:
+#   enabled: false
+#   socket: /run/agentpass/mcp.sock   # optional; replaces host/port
+#   host: "127.0.0.1"    # must be a loopback address
+#   port: 8205           # keep it off listen.tcp's port
+#   inline_wait: 50      # seconds to wait for approval before returning pending_approval
+
+# Passkey approval page (DESIGN 3.4). Loopback only; publish it with `tailscale serve`
+# (tailnet-only HTTPS) and set origin to that URL. Enrol with: agentpass passkey enroll
+# passkey:
+#   enabled: false
+#   host: "127.0.0.1"
+#   port: 8206
+#   rp_id: "gate.your-tailnet.ts.net"
+#   origin: "https://gate.your-tailnet.ts.net"
 
 messenger:
   type: "telegram"
@@ -19,6 +68,21 @@ messenger:
     token: "${GUARDIAN_BOT_TOKEN}"
     chat_id: 123456789              # integer — Telegram chat ID (negative for groups)
     allowed_users: [123456789]      # required — Telegram user IDs who can approve
+
+# Display-only notification channels. They show a pending approval with a link
+# to the passkey page and can never approve: trust is always "notify". To use them,
+# switch from the `messenger` shorthand above to a `channels` list, e.g.:
+#
+# channels:
+#   - { name: telegram, type: telegram, token: "${GUARDIAN_BOT_TOKEN}", chat_id: 123456789, allowed_users: [123456789] }
+#   - name: chat-bridge
+#     type: webhook                       # POST a JSON body; one retry on connection error only
+#     url: "${NOTIFY_WEBHOOK_URL}"        # deployment-specific endpoint
+#     timeout: 5
+#   - name: notify-cmd
+#     type: command                       # message on stdin, argv list, no shell; non-zero exit = failed
+#     command: ["my-notify-tool"]         # any program that reads the message from stdin
+#     timeout: 10
 
 services:
   homeassistant:
@@ -37,6 +101,24 @@ services:
       - status: 404
         message: "Entity not found: {body}"
 
+  # GitHub (tools/github.yaml): reads allow, writes ask, destructive tools deny.
+  # Use a fine-grained token; rules live in policy/github.yaml (extends: [github]).
+  # Enable this block to make the gh_* rules in permissions.example.yaml match;
+  # while it is commented out, `agentpass check-config` warns that they match no tool.
+  # github:
+  #   url: "https://api.github.com"
+  #   auth:
+  #     type: bearer
+  #     token: "${GITHUB_TOKEN}"
+  #   health:
+  #     method: GET
+  #     path: "/rate_limit"
+  #     expect_status: 200
+  #   tools: "tools/github.yaml"
+  #   errors:
+  #     - status: 401
+  #       message: "GitHub authentication failed (token expired?)"
+
   # Example: adding another HTTP API service
   # my_api:
   #   url: "https://api.example.com"
@@ -45,6 +127,27 @@ services:
   #     header_name: "X-API-Key"
   #     token: "${MY_API_KEY}"
   #   tools: "tools/my_api.yaml"
+
+  # Example: Google (Gmail / Calendar / Drive) via OAuth2. Run once, on the gateway host:
+  #   agentpass auth google --account personal --scopes gmail.modify,calendar,drive
+  # Client id/secret go in secrets.yaml next to this file (chmod 600), never here:
+  #   google: {client_id: "...", client_secret: "..."}
+  # Refresh tokens live in <storage dir>/tokens/google-personal.json (0600).
+  # gmail:
+  #   url: "https://gmail.googleapis.com"
+  #   auth: {type: oauth2, provider: google, account: personal}
+  #   health: {method: GET, path: "/gmail/v1/users/me/profile", expect_status: 200}
+  #   tools: "tools/gmail.yaml"
+  # calendar:
+  #   url: "https://www.googleapis.com"
+  #   auth: {type: oauth2, provider: google, account: personal}
+  #   health: {method: GET, path: "/calendar/v3/users/me/calendarList?maxResults=1", expect_status: 200}
+  #   tools: "tools/calendar.yaml"
+  # drive:
+  #   url: "https://www.googleapis.com"
+  #   auth: {type: oauth2, provider: google, account: personal}
+  #   health: {method: GET, path: "/drive/v3/about?fields=user", expect_status: 200}
+  #   tools: "tools/drive.yaml"
 
   # Example: Python plugin service (non-HTTP)
   # custom:

@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from agentpass.approval import ApprovalChannel, ApprovalCoordinator, ApprovalReason
 from agentpass.config import RateLimitConfig
 from agentpass.db import Database
-from agentpass.engine import PermissionEngine
+from agentpass.engine import Evaluation, PermissionEngine
 from agentpass.executor import ExecutionError, Executor
-from agentpass.messenger.base import ApprovalResult, MessengerAdapter
-from agentpass.models import Decision, PendingApproval, ToolRequest
+from agentpass.models import Decision
+from agentpass.pipeline import ApprovalDenied
 from agentpass.server import (
     APPROVAL_DENIED,
     APPROVAL_TIMEOUT,
@@ -27,6 +29,7 @@ from agentpass.server import (
     GatewayServer,
     RateLimiter,
 )
+from tests.fakes import FakeChannel, make_coordinator
 
 # ---------------------------------------------------------------------------
 # MockWebSocket
@@ -96,7 +99,7 @@ def _make_server(**overrides) -> GatewayServer:
     registry = overrides.pop("registry", None)
     engine = overrides.pop("engine", MagicMock(spec=PermissionEngine))
     executor = overrides.pop("executor", AsyncMock(spec=Executor))
-    messenger = overrides.pop("messenger", AsyncMock(spec=MessengerAdapter))
+    channel = overrides.pop("channel", None) or FakeChannel()
     db = overrides.pop("db", AsyncMock(spec=Database))
     services = overrides.pop("services", None)
     rate_limit_config = overrides.pop(
@@ -108,7 +111,7 @@ def _make_server(**overrides) -> GatewayServer:
         agent_token=overrides.pop("agent_token", TOKEN),
         engine=engine,
         executor=executor,
-        messenger=messenger,
+        coordinator=make_coordinator(db, channel),
         db=db,
         approval_timeout=overrides.pop("approval_timeout", 900),
         rate_limit_config=rate_limit_config,
@@ -253,7 +256,7 @@ class TestToolRequests:
     async def test_allow_executes_immediately(self):
         """allow -> execute immediately and return result."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"state": "on"}
         server = _make_server(engine=engine, executor=executor)
@@ -275,7 +278,7 @@ class TestToolRequests:
     async def test_deny_returns_policy_denied(self):
         """deny -> -32003."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.DENY
+        engine.evaluate.return_value = Evaluation(Decision.DENY)
         server = _make_server(engine=engine)
 
         ws = MockWebSocket()
@@ -291,13 +294,12 @@ class TestToolRequests:
     async def test_ask_triggers_approval_flow(self):
         """ask -> triggers approval flow, deferred until resolved."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"state": "on"}
         db = AsyncMock(spec=Database)
-        server = _make_server(engine=engine, messenger=messenger, executor=executor, db=db)
+        server = _make_server(engine=engine, channel=channel, executor=executor, db=db)
 
         ws = MockWebSocket()
         ws.enqueue(_auth_msg())
@@ -310,21 +312,14 @@ class TestToolRequests:
         await asyncio.sleep(0.2)
 
         # Verify approval was sent to messenger
-        messenger.send_approval.assert_called_once()
-        call_args = messenger.send_approval.call_args
-        request_id = call_args[0][0].request_id
+        assert len(channel.sent) == 1
+        request_id = channel.last_request.approval_id
 
         # Verify request is pending
         assert request_id in server._pending
 
         # Resolve the approval
-        approval_result = ApprovalResult(
-            request_id=request_id,
-            action="allow",
-            user_id="12345",
-            timestamp=time.time(),
-        )
-        await server.resolve_approval(approval_result)
+        await channel.approve(request_id, "12345")
 
         # Wait for task to complete
         await asyncio.sleep(0.2)
@@ -343,11 +338,10 @@ class TestToolRequests:
     async def test_ask_denied_by_user(self):
         """ask -> denied by user returns -32001."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         db = AsyncMock(spec=Database)
-        server = _make_server(engine=engine, messenger=messenger, db=db)
+        server = _make_server(engine=engine, channel=channel, db=db)
 
         ws = MockWebSocket()
         ws.enqueue(_auth_msg())
@@ -357,17 +351,10 @@ class TestToolRequests:
         await asyncio.sleep(0.2)
 
         # Get the server-generated request_id
-        call_args = messenger.send_approval.call_args
-        request_id = call_args[0][0].request_id
+        request_id = channel.last_request.approval_id
 
         # Deny the approval
-        approval_result = ApprovalResult(
-            request_id=request_id,
-            action="deny",
-            user_id="12345",
-            timestamp=time.time(),
-        )
-        await server.resolve_approval(approval_result)
+        await channel.deny(request_id, "12345")
 
         await asyncio.sleep(0.2)
         ws.closed = True
@@ -381,33 +368,18 @@ class TestToolRequests:
     async def test_ask_timeout(self):
         """ask -> timeout returns -32002."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         db = AsyncMock(spec=Database)
-        server = _make_server(engine=engine, messenger=messenger, db=db)
+        server = _make_server(engine=engine, channel=channel, db=db, approval_timeout=0.1)
 
         ws = MockWebSocket()
         ws.enqueue(_auth_msg())
         ws.enqueue(_tool_request_msg(msg_id="timeout-1"))
 
         task = asyncio.create_task(server.handle_connection(ws))
-        await asyncio.sleep(0.2)
-
-        # Get the server-generated request_id
-        call_args = messenger.send_approval.call_args
-        request_id = call_args[0][0].request_id
-
-        # Resolve with timeout (user_id="timeout")
-        approval_result = ApprovalResult(
-            request_id=request_id,
-            action="deny",
-            user_id="timeout",
-            timestamp=time.time(),
-        )
-        await server.resolve_approval(approval_result)
-
-        await asyncio.sleep(0.2)
+        # The gateway owns the timeout: nobody answers, the future times out
+        await asyncio.sleep(0.4)
         ws.closed = True
         await asyncio.sleep(0.1)
         await _cancel_task(task)
@@ -415,11 +387,12 @@ class TestToolRequests:
         tool_responses = [r for r in ws.get_responses() if r.get("id") == "timeout-1"]
         assert len(tool_responses) == 1
         assert tool_responses[0]["error"]["code"] == APPROVAL_TIMEOUT
+        assert [o.reason for _, o in channel.finalized] == [ApprovalReason.TIMEOUT]
 
     async def test_multiple_concurrent_requests(self):
         """Multiple concurrent tool_requests each get own task."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"result": "ok"}
         server = _make_server(engine=engine, executor=executor)
@@ -507,7 +480,7 @@ class TestToolRequests:
     async def test_execution_error_returns_execution_failed(self):
         """Execution error returns -32004."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.side_effect = ExecutionError("Service unavailable")
         server = _make_server(engine=engine, executor=executor)
@@ -534,7 +507,7 @@ class TestRateLimiting:
         """Exceeding max_requests_per_minute returns -32006."""
         rate_config = RateLimitConfig(max_requests_per_minute=2, max_pending_approvals=10)
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"ok": True}
         server = _make_server(engine=engine, executor=executor, rate_limit_config=rate_config)
@@ -560,13 +533,12 @@ class TestRateLimiting:
         """Exceeding max_pending_approvals returns -32006."""
         rate_config = RateLimitConfig(max_requests_per_minute=60, max_pending_approvals=1)
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-id"
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         db = AsyncMock(spec=Database)
         server = _make_server(
             engine=engine,
-            messenger=messenger,
+            channel=channel,
             db=db,
             rate_limit_config=rate_config,
         )
@@ -587,7 +559,7 @@ class TestRateLimiting:
         assert len(rate_limited) >= 1
 
         # Clean up pending futures
-        await server.resolve_all_pending("test_cleanup")
+        await server.resolve_all_pending()
         ws.closed = True
         await asyncio.sleep(0.1)
         await _cancel_task(task)
@@ -609,12 +581,13 @@ class TestConnectionManagement:
         ws1._iter_timeout = 5.0
 
         ws2 = MockWebSocket()
+        ws2.enqueue(_auth_msg())
 
         # Start first connection (will wait in message loop)
         task1 = asyncio.create_task(server.handle_connection(ws1))
         await asyncio.sleep(0.15)
 
-        # Try second connection — should be immediately rejected
+        # Try second connection — rejected once authenticated
         await server.handle_connection(ws2)
 
         assert ws2.closed is True
@@ -634,7 +607,7 @@ class TestAuditLogging:
     async def test_tool_request_logged(self):
         """Every tool request is logged with decision."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"ok": True}
         db = AsyncMock(spec=Database)
@@ -655,7 +628,7 @@ class TestAuditLogging:
     async def test_deny_logged(self):
         """Deny decision is logged."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.DENY
+        engine.evaluate.return_value = Evaluation(Decision.DENY)
         db = AsyncMock(spec=Database)
         server = _make_server(engine=engine, db=db)
 
@@ -709,23 +682,25 @@ class TestPersistence:
 
 class TestResolveAllPending:
     async def test_resolve_all_pending(self):
-        """All pending futures are resolved on shutdown."""
-        server = _make_server()
-        loop = asyncio.get_running_loop()
+        """All open approvals are denied on shutdown and their messages finalized."""
+        engine = MagicMock(spec=PermissionEngine)
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
+        server = _make_server(engine=engine, channel=channel)
+        tasks = [
+            asyncio.create_task(server.pipeline.process(f"agent-{i}", "ha_get_state", {}))
+            for i in range(3)
+        ]
+        while len(channel.sent) < 3:
+            await asyncio.sleep(0.01)
 
-        # Create some pending approvals manually
-        for i in range(3):
-            req = ToolRequest(id=f"p-{i}", tool_name="ha_get_state", args={})
-            future = loop.create_future()
-            server._pending[f"p-{i}"] = PendingApproval(request=req, future=future)
+        await server.resolve_all_pending(ApprovalReason.GATEWAY_SHUTDOWN)
 
-        await server.resolve_all_pending("test_shutdown")
-
-        for i in range(3):
-            assert server._pending[f"p-{i}"].future.done()
-            result = server._pending[f"p-{i}"].future.result()
-            assert result.action == "deny"
-            assert result.user_id == "test_shutdown"
+        for task in tasks:
+            with pytest.raises(ApprovalDenied, match="shutting down"):
+                await task
+        assert [o.reason for _, o in channel.finalized] == [ApprovalReason.GATEWAY_SHUTDOWN] * 3
+        assert not server._pending
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +720,7 @@ class TestRealWebSocket:
             agent_token=TOKEN,
             engine=MagicMock(spec=PermissionEngine),
             executor=AsyncMock(spec=Executor),
-            messenger=AsyncMock(spec=MessengerAdapter),
+            coordinator=ApprovalCoordinator(AsyncMock(spec=Database), []),
             db=AsyncMock(spec=Database),
         )
 
@@ -763,14 +738,14 @@ class TestRealWebSocket:
         from websockets.asyncio.server import serve as ws_serve
 
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"brightness": 100}
         server = GatewayServer(
             agent_token=TOKEN,
             engine=engine,
             executor=executor,
-            messenger=AsyncMock(spec=MessengerAdapter),
+            coordinator=ApprovalCoordinator(AsyncMock(spec=Database), []),
             db=AsyncMock(spec=Database),
         )
 
@@ -794,12 +769,12 @@ class TestRealWebSocket:
         from websockets.asyncio.server import serve as ws_serve
 
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.DENY
+        engine.evaluate.return_value = Evaluation(Decision.DENY)
         server = GatewayServer(
             agent_token=TOKEN,
             engine=engine,
             executor=AsyncMock(spec=Executor),
-            messenger=AsyncMock(spec=MessengerAdapter),
+            coordinator=ApprovalCoordinator(AsyncMock(spec=Database), []),
             db=AsyncMock(spec=Database),
         )
 
@@ -825,7 +800,7 @@ class TestRealWebSocket:
             agent_token=TOKEN,
             engine=MagicMock(spec=PermissionEngine),
             executor=AsyncMock(spec=Executor),
-            messenger=AsyncMock(spec=MessengerAdapter),
+            coordinator=ApprovalCoordinator(AsyncMock(spec=Database), []),
             db=AsyncMock(spec=Database),
         )
 
@@ -852,7 +827,7 @@ class TestMsgIdValidation:
     async def test_missing_id_returns_invalid_request(self):
         """Major 1: tool_request without 'id' field returns -32600."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         server = _make_server(engine=engine)
 
         ws = MockWebSocket()
@@ -885,7 +860,7 @@ class TestExecuteAndRespondExceptions:
     async def test_non_execution_error_returns_error_response(self):
         """Major 3: Non-ExecutionError exception returns -32004 with generic message."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.side_effect = RuntimeError("Unexpected HA error")
         server = _make_server(engine=engine, executor=executor)
@@ -904,7 +879,7 @@ class TestExecuteAndRespondExceptions:
     async def test_value_error_returns_error_response(self):
         """Major 3: ValueError (non-ExecutionError) also returns -32004."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ALLOW
+        engine.evaluate.return_value = Evaluation(Decision.ALLOW)
         executor = AsyncMock(spec=Executor)
         executor.execute.side_effect = ValueError("Bad value")
         server = _make_server(engine=engine, executor=executor)
@@ -926,35 +901,10 @@ class TestExecuteAndRespondExceptions:
 # ---------------------------------------------------------------------------
 
 
-class TestTimeoutScheduling:
-    async def test_schedule_timeout_called_after_approval(self):
-        """Critical 2: server calls messenger.schedule_timeout after sending approval."""
-        engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
-        messenger.schedule_timeout = MagicMock()  # Not on ABC, so add manually
-        db = AsyncMock(spec=Database)
-        server = _make_server(engine=engine, messenger=messenger, db=db, approval_timeout=300)
-
-        ws = MockWebSocket()
-        ws.enqueue(_auth_msg())
-        ws.enqueue(_tool_request_msg(msg_id="st-1"))
-
-        task = asyncio.create_task(server.handle_connection(ws))
-        await asyncio.sleep(0.2)
-
-        # Verify schedule_timeout was called with server-generated request_id
-        messenger.schedule_timeout.assert_called_once()
-        call_args = messenger.schedule_timeout.call_args[0]
-        assert call_args[1] == 300  # timeout
-        assert call_args[2] == "msg-123"  # message_id
-
-        # Clean up
-        await server.resolve_all_pending("test_cleanup")
-        ws.closed = True
-        await asyncio.sleep(0.1)
-        await _cancel_task(task)
+class TestTimeoutOwnership:
+    async def test_gateway_does_not_use_channel_scheduled_timeouts(self):
+        """The coordinator owns the approval timeout; channels have no timeout hooks."""
+        assert not hasattr(ApprovalChannel, "schedule_timeout")
 
 
 # ---------------------------------------------------------------------------
@@ -997,7 +947,7 @@ class TestOfflineApprovalFlow:
         assert result_resp[0]["result"]["results"][0]["request_id"] == "old-1"
 
         # Verify cleanup was called
-        db.delete_completed_results.assert_called_once_with(["old-1"])
+        db.delete_completed_results.assert_called_once_with(["old-1"], "default")
 
     async def test_get_pending_results_empty(self):
         """FR8: get_pending_results returns empty when no completed results."""
@@ -1035,15 +985,13 @@ class TestAuditResolution:
     async def test_audit_updated_on_approval_allow(self):
         """audit entry updated with resolution after approval resolves."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
-        messenger.schedule_timeout = MagicMock()
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         executor = AsyncMock(spec=Executor)
         executor.execute.return_value = {"state": "on"}
         db = AsyncMock(spec=Database)
         db.update_audit_resolution = AsyncMock()
-        server = _make_server(engine=engine, messenger=messenger, executor=executor, db=db)
+        server = _make_server(engine=engine, channel=channel, executor=executor, db=db)
 
         ws = MockWebSocket()
         ws.enqueue(_auth_msg())
@@ -1053,16 +1001,10 @@ class TestAuditResolution:
         await asyncio.sleep(0.2)
 
         # Get server-generated request_id
-        request_id = messenger.send_approval.call_args[0][0].request_id
+        request_id = channel.last_request.approval_id
 
         # Resolve with allow
-        approval_result = ApprovalResult(
-            request_id=request_id,
-            action="allow",
-            user_id="12345",
-            timestamp=time.time(),
-        )
-        await server.resolve_approval(approval_result)
+        await channel.approve(request_id, "12345")
 
         await asyncio.sleep(0.2)
         ws.closed = True
@@ -1079,13 +1021,11 @@ class TestAuditResolution:
     async def test_audit_updated_on_approval_deny(self):
         """audit entry updated on denial."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
-        messenger.schedule_timeout = MagicMock()
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         db = AsyncMock(spec=Database)
         db.update_audit_resolution = AsyncMock()
-        server = _make_server(engine=engine, messenger=messenger, db=db)
+        server = _make_server(engine=engine, channel=channel, db=db)
 
         ws = MockWebSocket()
         ws.enqueue(_auth_msg())
@@ -1095,15 +1035,9 @@ class TestAuditResolution:
         await asyncio.sleep(0.2)
 
         # Get server-generated request_id
-        request_id = messenger.send_approval.call_args[0][0].request_id
+        request_id = channel.last_request.approval_id
 
-        approval_result = ApprovalResult(
-            request_id=request_id,
-            action="deny",
-            user_id="67890",
-            timestamp=time.time(),
-        )
-        await server.resolve_approval(approval_result)
+        await channel.deny(request_id, "67890")
 
         await asyncio.sleep(0.2)
         ws.closed = True
@@ -1119,33 +1053,19 @@ class TestAuditResolution:
     async def test_audit_updated_on_timeout(self):
         """audit entry updated on timeout."""
         engine = MagicMock(spec=PermissionEngine)
-        engine.evaluate.return_value = Decision.ASK
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.send_approval.return_value = "msg-123"
-        messenger.schedule_timeout = MagicMock()
+        engine.evaluate.return_value = Evaluation(Decision.ASK)
+        channel = FakeChannel()
         db = AsyncMock(spec=Database)
         db.update_audit_resolution = AsyncMock()
-        server = _make_server(engine=engine, messenger=messenger, db=db)
+        server = _make_server(engine=engine, channel=channel, db=db, approval_timeout=0.1)
 
         ws = MockWebSocket()
         ws.enqueue(_auth_msg())
         ws.enqueue(_tool_request_msg(msg_id="audit-3"))
 
         task = asyncio.create_task(server.handle_connection(ws))
-        await asyncio.sleep(0.2)
-
-        # Get server-generated request_id
-        request_id = messenger.send_approval.call_args[0][0].request_id
-
-        approval_result = ApprovalResult(
-            request_id=request_id,
-            action="deny",
-            user_id="timeout",
-            timestamp=time.time(),
-        )
-        await server.resolve_approval(approval_result)
-
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.4)
+        request_id = channel.last_request.approval_id
         ws.closed = True
         await asyncio.sleep(0.1)
         await _cancel_task(task)
@@ -1154,7 +1074,7 @@ class TestAuditResolution:
         call_kwargs = db.update_audit_resolution.call_args.kwargs
         assert call_kwargs["request_id"] == request_id
         assert call_kwargs["resolution"] == "timed_out"
-        assert call_kwargs["resolved_by"] == "timeout"
+        assert call_kwargs["resolved_by"] == "gateway"
 
 
 # ---------------------------------------------------------------------------
@@ -1243,12 +1163,11 @@ class TestHealthStatus:
         """Returns healthy when db, messenger, and services are all up."""
         db = AsyncMock(spec=Database)
         db.health_check = AsyncMock(return_value=True)
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.health_check = AsyncMock(return_value=True)
+        channel = FakeChannel(healthy=True)
         svc = AsyncMock()
         svc.health_check = AsyncMock(return_value=True)
 
-        server = _make_server(db=db, messenger=messenger, services={"ha": svc})
+        server = _make_server(db=db, channel=channel, services={"ha": svc})
         status = await server.health_status()
 
         assert status["status"] == "healthy"
@@ -1260,10 +1179,9 @@ class TestHealthStatus:
         """Returns unhealthy when database is down."""
         db = AsyncMock(spec=Database)
         db.health_check = AsyncMock(return_value=False)
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.health_check = AsyncMock(return_value=True)
+        channel = FakeChannel(healthy=True)
 
-        server = _make_server(db=db, messenger=messenger)
+        server = _make_server(db=db, channel=channel)
         status = await server.health_status()
 
         assert status["status"] == "unhealthy"
@@ -1273,10 +1191,9 @@ class TestHealthStatus:
         """Returns unhealthy when Telegram bot is down."""
         db = AsyncMock(spec=Database)
         db.health_check = AsyncMock(return_value=True)
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.health_check = AsyncMock(return_value=False)
+        channel = FakeChannel(healthy=False)
 
-        server = _make_server(db=db, messenger=messenger)
+        server = _make_server(db=db, channel=channel)
         status = await server.health_status()
 
         assert status["status"] == "unhealthy"
@@ -1286,12 +1203,11 @@ class TestHealthStatus:
         """Stays healthy when a service is down (services are non-critical)."""
         db = AsyncMock(spec=Database)
         db.health_check = AsyncMock(return_value=True)
-        messenger = AsyncMock(spec=MessengerAdapter)
-        messenger.health_check = AsyncMock(return_value=True)
+        channel = FakeChannel(healthy=True)
         svc = AsyncMock()
         svc.health_check = AsyncMock(return_value=False)
 
-        server = _make_server(db=db, messenger=messenger, services={"ha": svc})
+        server = _make_server(db=db, channel=channel, services={"ha": svc})
         status = await server.health_status()
 
         assert status["status"] == "healthy"

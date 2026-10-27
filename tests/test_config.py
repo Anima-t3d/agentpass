@@ -54,7 +54,7 @@ class TestSubstituteEnvVars:
 
 VALID_CONFIG_YAML = textwrap.dedent("""\
     gateway:
-      host: "0.0.0.0"
+      host: "127.0.0.1"
       port: 8443
       tls:
         cert: "/path/cert.pem"
@@ -128,7 +128,7 @@ def permissions_file(tmp_path):
 class TestLoadConfig:
     def test_valid_config(self, config_file):
         cfg = load_config(str(config_file))
-        assert cfg.gateway.host == "0.0.0.0"
+        assert cfg.gateway.host == "127.0.0.1"
         assert cfg.gateway.port == 8443
         assert cfg.gateway.tls.cert == "/path/cert.pem"
         assert cfg.agent.token == "test-token"
@@ -188,7 +188,7 @@ class TestLoadConfig:
         assert isinstance(cfg.messenger.telegram.chat_id, int)
 
     def test_missing_gateway_host(self, tmp_path, _tools_dir):
-        yaml_text = VALID_CONFIG_YAML.replace('  host: "0.0.0.0"\n', "")
+        yaml_text = VALID_CONFIG_YAML.replace('  host: "127.0.0.1"\n', "")
         p = tmp_path / "config.yaml"
         p.write_text(yaml_text)
         with pytest.raises(ConfigError, match=r"gateway\.host"):
@@ -200,6 +200,52 @@ class TestLoadConfig:
         p.write_text(yaml_text)
         with pytest.raises(ConfigError, match=r"agent\.token"):
             load_config(str(p))
+
+    def test_agent_token_and_agents_dir_are_mutually_exclusive(self, tmp_path, _tools_dir):
+        yaml_text = VALID_CONFIG_YAML.replace(
+            'token: "test-token"', 'token: "test-token"\n  agents_dir: agents'
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml_text)
+        with pytest.raises(ConfigError, match="mutually exclusive"):
+            load_config(str(p))
+
+    def test_agents_dir_without_token_is_valid_and_resolved_to_config_dir(
+        self, tmp_path, _tools_dir
+    ):
+        yaml_text = VALID_CONFIG_YAML.replace('token: "test-token"', "agents_dir: agents")
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml_text)
+        cfg = load_config(str(p))
+        assert cfg.agent.token == ""
+        assert cfg.agent.agents_dir == str(tmp_path / "agents")
+
+    def _mcp_cfg(self, tmp_path, mcp_yaml, per_agent=True):
+        text = VALID_CONFIG_YAML
+        if per_agent:
+            text = text.replace('token: "test-token"', "agents_dir: agents")
+        p = tmp_path / "config.yaml"
+        p.write_text(text + mcp_yaml)
+        return str(p)
+
+    def test_mcp_defaults_off_and_loopback(self, tmp_path, _tools_dir):
+        cfg = load_config(self._mcp_cfg(tmp_path, ""))
+        assert (cfg.mcp.enabled, cfg.mcp.host, cfg.mcp.port, cfg.mcp.inline_wait) == (
+            False,
+            "127.0.0.1",
+            8205,
+            50,
+        )
+
+    def test_mcp_rejects_non_loopback_host(self, tmp_path, _tools_dir):
+        path = self._mcp_cfg(tmp_path, "\nmcp:\n  enabled: true\n  host: 0.0.0.0\n")
+        with pytest.raises(ConfigError, match="loopback"):
+            load_config(path)
+
+    def test_mcp_requires_per_agent_tokens(self, tmp_path, _tools_dir):
+        path = self._mcp_cfg(tmp_path, "\nmcp:\n  enabled: true\n", per_agent=False)
+        with pytest.raises(ConfigError, match="agents_dir"):
+            load_config(path)
 
     def test_empty_allowed_users(self, tmp_path, _tools_dir):
         yaml_text = VALID_CONFIG_YAML.replace("allowed_users: [111, 222]", "allowed_users: []")
