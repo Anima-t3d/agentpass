@@ -1,0 +1,345 @@
+# GitHub tools. One tool per endpoint; there is no generic "call any GitHub path"
+# tool. Reads are allowed, writes ask, destructive or security-sensitive tools
+# are denied (rules in policy/github.yaml). The token is the service's bearer
+# auth and is never visible to agents.
+#
+# Signature: gh_x(owner/repo[, number]). Titles, bodies and other free text are
+# not part of the signature, so they may contain any characters.
+
+x-common:
+  owner: &owner
+    type: string
+    required: true
+    max_length: 39
+    validate: "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    description: "Repository owner (user or organization)"
+  repo: &repo
+    type: string
+    required: true
+    max_length: 100
+    validate: "(?!\\.{1,2}$)[A-Za-z0-9._-]+"
+    description: "Repository name"
+  number: &number
+    { type: integer, required: true, min: 1, description: "Issue or pull request number" }
+  per_page: &per_page
+    { type: integer, min: 1, max: 100, default: 30, signature: false }
+  page: &page
+    { type: integer, min: 1, default: 1, signature: false }
+  headers: &headers
+    Accept: "application/vnd.github+json"
+    X-GitHub-Api-Version: "2022-11-28"
+
+tools:
+  # ---------------------------------------------------------------- reads
+  gh_list_repos:
+    description: "List repositories the token can access"
+    args:
+      sort: { type: enum, values: [created, updated, pushed, full_name], default: updated }
+      per_page: *per_page
+      page: *page
+    request:
+      method: GET
+      path: "/user/repos"
+      query: { sort: "{sort}", per_page: "{per_page}", page: "{page}" }
+      headers: *headers
+    response: { max_bytes: 1048576, wrap: repos }
+    risk: low
+
+  gh_get_repo:
+    description: "Get a repository"
+    signature: "{owner}/{repo}"
+    args: { owner: *owner, repo: *repo }
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}"
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  gh_list_issues:
+    description: "List issues of a repository (pull requests are included by GitHub)"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      state: { type: enum, values: [open, closed, all], default: open }
+      per_page: *per_page
+      page: *page
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/issues"
+      query: { state: "{state}", per_page: "{per_page}", page: "{page}" }
+      headers: *headers
+    response: { max_bytes: 1048576, wrap: issues }
+    risk: low
+
+  gh_get_issue:
+    description: "Get an issue"
+    signature: "{owner}/{repo}, {number}"
+    args: { owner: *owner, repo: *repo, number: *number }
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/issues/{number}"
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  gh_list_issue_comments:
+    description: "List comments on an issue or pull request"
+    signature: "{owner}/{repo}, {number}"
+    args:
+      owner: *owner
+      repo: *repo
+      number: *number
+      per_page: *per_page
+      page: *page
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/issues/{number}/comments"
+      query: { per_page: "{per_page}", page: "{page}" }
+      headers: *headers
+    response: { max_bytes: 1048576, wrap: comments }
+    risk: low
+
+  gh_list_pulls:
+    description: "List pull requests of a repository"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      state: { type: enum, values: [open, closed, all], default: open }
+      per_page: *per_page
+      page: *page
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/pulls"
+      query: { state: "{state}", per_page: "{per_page}", page: "{page}" }
+      headers: *headers
+    response: { max_bytes: 1048576, wrap: pulls }
+    risk: low
+
+  gh_get_pull:
+    description: "Get a pull request"
+    signature: "{owner}/{repo}, {number}"
+    args: { owner: *owner, repo: *repo, number: *number }
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/pulls/{number}"
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  gh_list_workflow_runs:
+    description: "List GitHub Actions workflow runs of a repository"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      status:
+        type: enum
+        values: [queued, in_progress, completed, success, failure, cancelled]
+      per_page: *per_page
+      page: *page
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/actions/runs"
+      query: { status: "{status}", per_page: "{per_page}", page: "{page}" }
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  gh_get_workflow_run:
+    description: "Get a GitHub Actions workflow run"
+    signature: "{owner}/{repo}, {run_id}"
+    args:
+      owner: *owner
+      repo: *repo
+      run_id: { type: integer, required: true, min: 1, description: "Workflow run id" }
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/actions/runs/{run_id}"
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  # --------------------------------------------------------------- writes
+  gh_create_issue:
+    description: "Create an issue"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      title: { type: string, required: true, max_length: 256, signature: false }
+      body: { type: text, max_length: 65536 }
+      labels:
+        type: array
+        items: { type: string, max_length: 50 }
+        max_items: 10
+        signature: false
+    request:
+      method: POST
+      path: "/repos/{owner}/{repo}/issues"
+      headers: *headers
+      body: { include: [title, body, labels] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [body], store_result: truncated }
+    risk: medium
+
+  gh_create_issue_comment:
+    description: "Comment on an issue or pull request"
+    signature: "{owner}/{repo}, {number}"
+    args:
+      owner: *owner
+      repo: *repo
+      number: *number
+      body: { type: text, required: true, max_length: 65536 }
+    request:
+      method: POST
+      path: "/repos/{owner}/{repo}/issues/{number}/comments"
+      headers: *headers
+      body: { include: [body] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [body], store_result: truncated }
+    risk: medium
+
+  gh_create_pull:
+    description: "Open a pull request"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      title: { type: string, required: true, max_length: 256, signature: false }
+      head: { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/:-]+", signature: false }
+      base: { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+", signature: false }
+      body: { type: text, max_length: 65536 }
+      draft: { type: boolean, signature: false }
+    request:
+      method: POST
+      path: "/repos/{owner}/{repo}/pulls"
+      headers: *headers
+      body: { include: [title, head, base, body, draft] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [body], store_result: truncated }
+    risk: medium
+
+  gh_dispatch_workflow:
+    description: "Trigger a workflow_dispatch event"
+    signature: "{owner}/{repo}, {workflow}"
+    args:
+      owner: *owner
+      repo: *repo
+      workflow:
+        type: string
+        required: true
+        max_length: 100
+        validate: "[0-9]+|[A-Za-z0-9._-]+\\.ya?ml"
+        description: "Workflow file name or id"
+      ref: { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+", signature: false }
+      inputs: { type: object, signature: false, description: "Workflow inputs" }
+    request:
+      method: POST
+      path: "/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+      headers: *headers
+      body: { include: [ref, inputs] }
+    response: { type: none }
+    risk: medium
+
+  # ---------------------------------------- destructive or security-sensitive
+  # These exist so the policy can name them; the shared rule set denies all of
+  # them. They are never allowed or asked.
+  gh_delete_repo:
+    description: "Delete a repository"
+    signature: "{owner}/{repo}"
+    args: { owner: *owner, repo: *repo }
+    request:
+      method: DELETE
+      path: "/repos/{owner}/{repo}"
+      headers: *headers
+    response: { type: none }
+    risk: high
+
+  gh_update_branch_protection:
+    description: "Change branch protection rules"
+    signature: "{owner}/{repo}, {branch}"
+    args:
+      owner: *owner
+      repo: *repo
+      branch: { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+" }
+      enforce_admins: { type: boolean, required: true, signature: false }
+      required_status_checks: { type: object, signature: false }
+      required_pull_request_reviews: { type: object, signature: false }
+      restrictions: { type: object, signature: false }
+    request:
+      method: PUT
+      path: "/repos/{owner}/{repo}/branches/{branch:path}/protection"
+      headers: *headers
+      body:
+        include: [enforce_admins, required_status_checks, required_pull_request_reviews, restrictions]
+    response: { max_bytes: 1048576 }
+    risk: high
+
+  gh_add_collaborator:
+    description: "Add a collaborator to a repository"
+    signature: "{owner}/{repo}, {username}"
+    args:
+      owner: *owner
+      repo: *repo
+      username: { type: string, required: true, max_length: 39, validate: "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?" }
+      permission: { type: enum, values: [pull, triage, push, maintain, admin], default: push, signature: false }
+    request:
+      method: PUT
+      path: "/repos/{owner}/{repo}/collaborators/{username}"
+      headers: *headers
+      body: { include: [permission] }
+    response: { type: none }
+    risk: high
+
+  gh_create_deploy_key:
+    description: "Add a deploy key to a repository"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      title: { type: string, max_length: 100, signature: false }
+      key: { type: text, required: true, max_length: 8192 }
+      read_only: { type: boolean, signature: false }
+    request:
+      method: POST
+      path: "/repos/{owner}/{repo}/keys"
+      headers: *headers
+      body: { include: [title, key, read_only] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [key] }
+    risk: high
+
+  gh_delete_deploy_key:
+    description: "Remove a deploy key from a repository"
+    signature: "{owner}/{repo}, {key_id}"
+    args:
+      owner: *owner
+      repo: *repo
+      key_id: { type: integer, required: true, min: 1 }
+    request:
+      method: DELETE
+      path: "/repos/{owner}/{repo}/keys/{key_id}"
+      headers: *headers
+    response: { type: none }
+    risk: high
+
+  gh_set_actions_secret:
+    description: "Create or update a repository Actions secret"
+    signature: "{owner}/{repo}, {secret_name}"
+    args:
+      owner: *owner
+      repo: *repo
+      secret_name: { type: string, required: true, max_length: 100, validate: "[A-Z_][A-Z0-9_]*" }
+      encrypted_value: { type: text, required: true, max_length: 65536 }
+      key_id: { type: string, required: true, max_length: 64, validate: "[0-9]+", signature: false }
+    request:
+      method: PUT
+      path: "/repos/{owner}/{repo}/actions/secrets/{secret_name}"
+      headers: *headers
+      body: { include: [encrypted_value, key_id] }
+    response: { type: none }
+    audit: { redact_args: [encrypted_value] }
+    risk: high

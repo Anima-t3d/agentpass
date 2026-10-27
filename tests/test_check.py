@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from agentpass.__main__ import main
+from agentpass.agents import generate_token
 from agentpass.check import _VALUE, check, globs_intersect
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +74,39 @@ def test_clean_setup_has_no_findings(tmp_path):
     report = check(*write_setup(tmp_path), env={})
     assert report.errors == [] and report.warnings == []
     assert report.exit_code() == 0
+
+
+def test_golden_example_permissions_against_real_tools(tmp_path):
+    """The shipped permission examples must lint clean against the shipped tool YAML."""
+    services = "\n".join(
+        f"  {name}: {{url: 'http://localhost', auth: {{type: bearer, token: t}}, "
+        f"tools: '{ROOT / 'tools' / (name + '.yaml')}'}}"
+        for name in ("homeassistant", "github")
+    )
+    for name in ("gmail", "calendar", "drive"):
+        services += (
+            f"\n  {name}: {{url: 'http://localhost', auth: {{type: oauth2, provider: google, "
+            f"account: personal}}, tools: '{ROOT / 'tools' / (name + '.yaml')}'}}"
+        )
+    (tmp_path / "gateway.yaml").write_text(
+        f"""\
+gateway: {{health_port: 8210}}
+{LISTEN}
+agent: {{agents_dir: agents, policy_dir: '{ROOT / "policy"}'}}
+messenger: {{type: telegram, telegram: {{token: t, chat_id: 1, allowed_users: [1]}}}}
+services:
+{services}
+storage: {{type: sqlite, path: ./d.db}}
+"""
+    )
+    (tmp_path / "agents").mkdir()
+    _, digest = generate_token("hermes")
+    (tmp_path / "agents" / "hermes.yaml").write_text(
+        f"id: hermes\ntoken_hash: '{digest}'\nextends: [github]\n"
+    )
+    report = check(str(tmp_path / "gateway.yaml"), str(ROOT / "permissions.example.yaml"), env={})
+    assert report.errors == [] and report.warnings == []
+    assert report.summary["agents"] == 1 and report.summary["rule_sets"] == 2
 
 
 def test_lint_unreachable_default(tmp_path):

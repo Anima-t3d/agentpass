@@ -1,0 +1,42 @@
+# Google Drive tools. Service entry for config.yaml:
+#   drive:
+#     url: "https://www.googleapis.com"
+#     auth: {type: oauth2, provider: google, account: personal}
+#     health: {method: GET, path: "/drive/v3/about?fields=user", expect_status: 200}
+#     tools: "tools/drive.yaml"
+tools:
+  drive_list_files:
+    description: "List files matching a Drive search query"
+    signature: "{query}"
+    args:
+      query:
+        required: true
+        validate: "[A-Za-z0-9 _:=.'\\-]{0,200}"
+    request:
+      method: GET
+      path: "/drive/v3/files?pageSize=25&q={query}"
+
+  drive_get_file:
+    description: "Get a file's metadata"
+    signature: "{file_id}"
+    args:
+      file_id:
+        required: true
+        validate: "[A-Za-z0-9_\\-]{10,100}"
+    request:
+      method: GET
+      path: "/drive/v3/files/{file_id}?fields=id,name,mimeType,modifiedTime,size,parents"
+
+  drive_create_folder:
+    description: "Create a folder"
+    signature: "{name}"
+    args:
+      name:
+        required: true
+        validate: "[^\\x00-\\x1f/]{1,200}"
+      mimeType:
+        required: true
+        validate: "application/vnd\\.google-apps\\.folder"
+    request:
+      method: POST
+      path: "/drive/v3/files"

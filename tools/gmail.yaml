@@ -1,0 +1,51 @@
+# Gmail tools. Service entry for config.yaml:
+#   gmail:
+#     url: "https://gmail.googleapis.com"
+#     auth: {type: oauth2, provider: google, account: personal}
+#     health: {method: GET, path: "/gmail/v1/users/me/profile", expect_status: 200}
+#     tools: "tools/gmail.yaml"
+tools:
+  gmail_list_messages:
+    description: "List message ids matching a Gmail search query"
+    signature: "{query}"
+    args:
+      query:
+        required: true
+        validate: "[A-Za-z0-9 _:@.\\-]{0,200}"
+    risk: low
+    remember: signature
+    request:
+      method: GET
+      path: "/gmail/v1/users/me/messages?maxResults=20&q={query}"
+
+  gmail_get_message:
+    description: "Read one message (headers and body)"
+    signature: "{message_id}"
+    args:
+      message_id:
+        required: true
+        validate: "[0-9a-f]{10,32}"
+    risk: low
+    remember: signature
+    request:
+      method: GET
+      path: "/gmail/v1/users/me/messages/{message_id}?format=full"
+
+  gmail_list_labels:
+    description: "List mailbox labels"
+    risk: low
+    request:
+      method: GET
+      path: "/gmail/v1/users/me/labels"
+
+  gmail_send_message:
+    description: "Send an email; raw is the base64url-encoded RFC 5322 message"
+    signature: "{raw}"
+    args:
+      raw:
+        required: true
+        validate: "[A-Za-z0-9_\\-=]{1,100000}"
+    risk: high
+    request:
+      method: POST
+      path: "/gmail/v1/users/me/messages/send"

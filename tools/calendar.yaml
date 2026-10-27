@@ -1,0 +1,72 @@
+# Google Calendar tools. Service entry for config.yaml:
+#   calendar:
+#     url: "https://www.googleapis.com"
+#     auth: {type: oauth2, provider: google, account: personal}
+#     health: {method: GET, path: "/calendar/v3/users/me/calendarList?maxResults=1", expect_status: 200}
+#     tools: "tools/calendar.yaml"
+tools:
+  calendar_list_calendars:
+    description: "List the calendars on the account"
+    risk: low
+    request:
+      method: GET
+      path: "/calendar/v3/users/me/calendarList"
+
+  calendar_list_events:
+    description: >-
+      List events on one calendar between time_min and time_max, ordered by start time.
+      time_min is required; time_max is optional. Both are RFC 3339 timestamps WITH a
+      UTC offset: "2026-10-27T00:00:00+08:00" (offset form) or "2026-10-27T00:00:00Z" (UTC).
+      A bare date or words like "tomorrow" are rejected. max_results is 1-250 (default 50).
+    signature: "{calendar_id}"
+    args:
+      calendar_id:
+        type: string
+        required: true
+        validate: "[A-Za-z0-9_.@\\-]{1,200}"
+      time_min:
+        type: string
+        required: true
+        validate: "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})"
+        signature: false
+      time_max:
+        type: string
+        validate: "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})"
+        signature: false
+      max_results:
+        type: integer
+        min: 1
+        max: 250
+        default: 50
+        signature: false
+    risk: low
+    remember: signature
+    request:
+      method: GET
+      path: "/calendar/v3/calendars/{calendar_id}/events"
+      query:
+        timeMin: "{time_min}"
+        timeMax: "{time_max}"
+        maxResults: "{max_results}"
+        singleEvents: "true"
+        orderBy: "startTime"
+
+  calendar_create_event:
+    description: "Create an event; start and end are Calendar API objects, e.g. {dateTime: ..., timeZone: ...}"
+    signature: "{calendar_id}, {summary}"
+    args:
+      calendar_id:
+        required: true
+        validate: "[A-Za-z0-9_.@\\-]{1,200}"
+      summary:
+        required: true
+        validate: "[^\\x00-\\x1f]{1,200}"
+      start:
+        required: true
+      end:
+        required: true
+    risk: medium
+    request:
+      method: POST
+      path: "/calendar/v3/calendars/{calendar_id}/events"
+      body_exclude: [calendar_id]

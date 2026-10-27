@@ -1,0 +1,33 @@
+# Shared rule set for the GitHub tools (tools/github.yaml).
+# Use it from an agent file:  extends: [github]
+#
+# Reads allow, writes ask, destructive or security-sensitive actions deny.
+# Deny rules win over everything an agent file says.
+defaults:
+  - pattern: "gh_get_*"
+    action: allow
+  - pattern: "gh_list_*"
+    action: allow
+  - pattern: "gh_create_*"
+    action: ask
+  - pattern: "gh_dispatch_*"
+    action: ask
+  - pattern: "gh_*"
+    action: ask
+
+rules:
+  - pattern: "gh_delete_*"
+    action: deny
+    description: "Deleting repositories (or anything else on GitHub) is never allowed"
+  - pattern: "gh_update_branch_protection*"
+    action: deny
+    description: "Branch protection cannot be changed through the gateway"
+  - pattern: "gh_add_collaborator*"
+    action: deny
+    description: "Adding collaborators changes who can access the repository"
+  - pattern: "gh_*_deploy_key*"
+    action: deny
+    description: "Deploy keys are credentials"
+  - pattern: "gh_set_actions_secret*"
+    action: deny
+    description: "Actions secrets are credentials"
