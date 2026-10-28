@@ -120,6 +120,12 @@ The agent API listens on a Unix socket by default (0660, group agentpass-clients
 - Format: `ruff format --check src/ tests/`
 - Pre-commit hook runs: ruff format → ruff check → pytest
 
+## Commits
+
+- [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, imperative, lower case, no trailing period
+- Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`, `ci`; optional scope such as `tools`, `oauth`, `channels`
+- Breaking changes: `!` after the type and a `BREAKING CHANGE:` footer
+
 ## Testing
 
 - `pytest` + `pytest-asyncio` (asyncio_mode = "auto")
