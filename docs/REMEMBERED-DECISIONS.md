@@ -109,7 +109,7 @@ Step 1 (the approval message):
 [Allow always...] [Deny always...]      <- second row; "Allow always..." omitted when not eligible
 ```
 
-Eligibility is computed in the pipeline when it builds the `ApprovalRequest` and passed to channels as `req.remember = RememberOffer(allow_exact, allow_tool, deny_exact, deny_tool, allow_expires, ...)`. "Allow always" is **not offered** when: the rule requires passkey; effective risk is high (or unknown, see above); the signature is too long to be shown in full in the scope step (> 1500 chars); the request came from a floor or explicit deny (no prompt exists). The `tool` scope is additionally not offered when risk is high/unknown/unset. "Deny always" is offered for every prompt, including passkey and high-risk (deny is always safe, both scopes).
+Eligibility is computed in the pipeline when it builds the `ApprovalRequest` and passed to channels as `req.remember = RememberOffer(allow_exact, allow_tool, deny_exact, deny_tool, allow_expires, ...)`. "Allow always" is **not offered** when: the rule requires passkey; effective risk is high (or unknown, see above); the signature is too long to be shown in full in the scope step (> 1500 chars); the request came from a floor or explicit deny (no prompt exists). The `tool` scope is additionally not offered when risk is high/unknown/unset. "Deny always" is offered for every prompt except passkey-required ones, which show only the passkey link and a plain Deny in Telegram; high-risk prompts still offer it (deny is always safe, both scopes).
 
 Step 2 (after tapping "Allow always..." or "Deny always..."): the message is edited in place to show exactly what will be stored, then waits for a scope tap:
 

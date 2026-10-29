@@ -109,7 +109,7 @@ A `notify` channel may show the request (agent, tool, args) and a link to the ap
 
 - The gateway holds the bot token; only the service user can read it. A tap arrives as a Telegram update fetched by the gateway with its own token and carries `from_user.id`, which Telegram sets; the gateway checks it against `allowed_users` (numeric ids, not usernames). An agent cannot forge a tap from the operator's account.
 - An agent *with* the bot token could call the Bot API, post messages and read updates (not forge taps). Hence the token never leaves the service user's files (section 3.5).
-- Weakness: a Telegram tap is a bearer action by an account. If the operator's Telegram account is compromised, so are approvals. Rules marked `approval.require: passkey` remove Telegram from the decision (section 3.4) for high-risk actions.
+- Weakness: a Telegram tap is a bearer action by an account. If the operator's Telegram account is compromised, so are approvals. Rules marked `approval.require: passkey` remove Telegram from the decision (section 3.4) for high-risk actions. Telegram then only leads to the page: the message shows an "Approve with passkey" URL button and Deny, with no Allow buttons.
 - Approval ids are 128-bit random and callback data is `<approval_id>:<y|n>`. The gateway rejects callbacks for ids that are not currently `pending`.
 
 ### 3.4 Passkey-protected approval page
