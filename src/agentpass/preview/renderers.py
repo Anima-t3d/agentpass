@@ -13,6 +13,7 @@ from typing import Any
 from agentpass.config import ToolDefinition
 from agentpass.preview.model import LookupNote, Preview, Section
 from agentpass.preview.sanitize import escape_unsafe
+from agentpass.preview.timefmt import TimeFormatter
 
 SUMMARY_LIMIT = 300
 
@@ -66,6 +67,7 @@ def render_entity_state(
     *,
     max_chars: int,
     built_at: str,
+    times: TimeFormatter | None = None,
 ) -> Preview:
     """``ha_call_service`` and ``ha_fire_event``: which device, what state, what effect.
 
@@ -122,7 +124,9 @@ def render_entity_state(
             if attrs.get(key):
                 device.append([label, _text(attrs[key], max_chars)])
         if state and state.get("last_changed"):
-            device.append(["Last changed", _text(state["last_changed"], max_chars)])
+            changed = str(state["last_changed"])
+            shown = times.format(changed) if times is not None else None
+            device.append(["Last changed", _text(shown or changed, max_chars)])
     sections = []
     if device:
         sections.append(Section("kv", "Device", device))

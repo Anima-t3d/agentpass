@@ -48,6 +48,7 @@ CONFIG_KEYS = {
     "services",
     "storage",
     "approval_timeout",
+    "approval",
     "rate_limit",
     "mcp",
     "passkey",

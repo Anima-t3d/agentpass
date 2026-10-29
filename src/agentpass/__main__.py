@@ -432,7 +432,10 @@ async def run(args: argparse.Namespace) -> None:
 
     # 8. Approval channels and coordinator
     coordinator = ApprovalCoordinator(
-        db, build_channels(config, db=db), remembered, PreviewService(registry, services)
+        db,
+        build_channels(config, db=db),
+        remembered,
+        PreviewService(registry, services, display_timezone=config.display_timezone),
     )
 
     # 9. Initialize gateway server

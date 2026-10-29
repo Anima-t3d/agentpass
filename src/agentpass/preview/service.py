@@ -14,11 +14,13 @@ import logging
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from agentpass.config import PreviewSpec, PreviewWarning, ToolDefinition
 from agentpass.preview.model import LookupNote, Preview, Section, Unavailable
 from agentpass.preview.renderers import render_entity_state
 from agentpass.preview.sanitize import escape_unsafe
+from agentpass.preview.timefmt import TimeFormatter
 from agentpass.services.http import HTTPServiceError
 
 if TYPE_CHECKING:
@@ -66,15 +68,25 @@ def _as_text(value: Any) -> str | object:
 class _Context:
     """The values a template may reference: validated args and successful lookups."""
 
-    def __init__(self, values: dict[str, Any], max_chars: int) -> None:
+    def __init__(
+        self,
+        values: dict[str, Any],
+        max_chars: int,
+        times: TimeFormatter | None = None,
+        lookup_ids: frozenset[str] = frozenset(),
+    ) -> None:
         self._values = values
         self._max = max_chars
+        self._times = times
+        self._lookup_ids = lookup_ids
+        self.raw_times: dict[str, list[str]] = {}  # lookup id -> "path: raw" of rewritten times
 
-    def render(self, template: str) -> str | None:
+    def render(self, template: str, display: bool = True) -> str | None:
         """Substitute ``{ref}``; ``None`` if any reference has no value.
 
         Output is plain text: control and bidi characters are escaped, each value is
-        capped at ``max_chars``. The template itself is written by the operator.
+        capped at ``max_chars``. The template itself is written by the operator. With
+        ``display`` a timestamp that came from a lookup is shown in the display zone.
         """
         failed = False
 
@@ -87,6 +99,14 @@ class _Context:
                 failed = True
                 return ""
             assert isinstance(text, str)
+            if display and self._times is not None and m.group(1) in self._lookup_ids:
+                shown = self._times.format(text)
+                if shown is not None:
+                    seen = self.raw_times.setdefault(m.group(1), [])
+                    entry = f"{m.group(2).lstrip('.') or m.group(1)}: {text}"
+                    if entry not in seen:
+                        seen.append(entry)
+                    text = shown
             text = escape_unsafe(text)
             return text if len(text) <= self._max else text[: self._max - 1] + "…"
 
@@ -94,7 +114,8 @@ class _Context:
         return None if failed else out
 
     def value(self, template: str) -> str | None:
-        return self.render(template)
+        """The raw text, for comparisons: never rewritten for display."""
+        return self.render(template, display=False)
 
 
 def _warning_fires(w: PreviewWarning, ctx: _Context) -> bool:
@@ -136,7 +157,10 @@ class PreviewService:
         *,
         timeout: float = DEFAULT_TIMEOUT,
         max_bytes: int = DEFAULT_MAX_BYTES,
+        display_timezone: str = "UTC",
     ) -> None:
+        self._zone = display_timezone
+        ZoneInfo(display_timezone)  # fail at start-up, not on the first request
         self._registry = registry
         self._services = services
         self._timeout = timeout
@@ -171,14 +195,20 @@ class PreviewService:
         notes, failure = await self._run_lookups(definition, spec, values)
         if failure is not None:
             return Unavailable(failure, _now())
+        times = TimeFormatter(self._zone)
         if spec.renderer == "entity_state":
             preview = render_entity_state(
-                definition, values, notes, max_chars=spec.max_chars, built_at=_now()
+                definition, values, notes, max_chars=spec.max_chars, built_at=_now(), times=times
             )
+            for note in notes:
+                if note.id == "state":
+                    note.raw_times = [f"last_changed: {raw}" for _, raw in times.seen]
             if spec.confirm_text:
-                preview.confirm_text = _Context(values, spec.max_chars).render(spec.confirm_text)
+                preview.confirm_text = _Context(values, spec.max_chars).render(
+                    spec.confirm_text, display=False
+                )
             return self._fit(preview).seal()
-        return self._render(definition, spec, values, notes)
+        return self._render(definition, spec, values, notes, times)
 
     async def _run_lookups(
         self, definition: ToolDefinition, spec: PreviewSpec, values: dict[str, Any]
@@ -230,8 +260,9 @@ class PreviewService:
         spec: PreviewSpec,
         values: dict[str, Any],
         notes: list[LookupNote],
+        times: TimeFormatter,
     ) -> Preview | Unavailable:
-        ctx = _Context(values, spec.max_chars)
+        ctx = _Context(values, spec.max_chars, times, frozenset(lk.id for lk in spec.lookups))
         rows = []
         for f in spec.fields:
             label, value = ctx.render(f.label), ctx.render(f.value)
@@ -252,8 +283,12 @@ class PreviewService:
                 ctx.render(w.text) or w.text for w in spec.warnings if _warning_fires(w, ctx)
             ],
             lookups=notes,
-            confirm_text=ctx.render(spec.confirm_text) if spec.confirm_text else None,
+            confirm_text=ctx.render(spec.confirm_text, display=False)
+            if spec.confirm_text
+            else None,
         )
+        for note in notes:
+            note.raw_times = ctx.raw_times.get(note.id, [])
         return self._fit(preview).seal()
 
     def _fit(self, preview: Preview) -> Preview:

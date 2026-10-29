@@ -38,6 +38,7 @@ class LookupNote:
     status: str
     detail: str = ""  # failure reason or "HTTP 404"; never response content
     at: str = ""  # ISO-8601 UTC
+    raw_times: list[str] = field(default_factory=list)  # "path: raw value" of rewritten times
 
 
 @dataclass

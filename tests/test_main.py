@@ -83,6 +83,7 @@ def _make_mock_config(*, tls=None):
     config.approval_timeout = 900
     config.mcp.enabled = False
     config.rate_limit = MagicMock()
+    config.display_timezone = "UTC"
     return config
 
 

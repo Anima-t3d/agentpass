@@ -501,8 +501,9 @@ function drawPreview(p, card) {
   if (pv.lookups.length) {
     const ul = h('ul');
     for (const n of pv.lookups) {
+      const raw = (n.raw_times || []).length ? ' · raw ' + n.raw_times.join(', ') : '';
       ul.append(h('li', null, icon(n.status === 'ok' ? 'check-circle' : 'x-circle'),
-        h('span', {text: n.id + ': ' + (n.status === 'ok' ? 'ok' : 'failed' + (n.detail ? ' (' + n.detail + ')' : ''))})));
+        h('span', {text: n.id + ': ' + (n.status === 'ok' ? 'ok' : 'failed' + (n.detail ? ' (' + n.detail + ')' : '')) + raw})));
     }
     foot.append(ul);
   }

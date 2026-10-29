@@ -166,6 +166,19 @@ class McpConfig:
     socket: str | None = None  # Unix socket path (same group and mode as the agent socket)
 
 
+def parse_timezone(value: Any) -> str:
+    """An IANA zone name, validated with zoneinfo. An unknown name is an error, never a fallback."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    if not isinstance(value, str) or not value or value.startswith(("/", ".")):
+        raise ConfigError(f"approval.display_timezone must be an IANA zone name, got: {value!r}")
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        raise ConfigError(f"approval.display_timezone: unknown time zone {value!r}") from None
+    return value
+
+
 @dataclass
 class Config:
     gateway: GatewayConfig
@@ -174,6 +187,7 @@ class Config:
     services: dict[str, ServiceConfig]
     storage: StorageConfig
     approval_timeout: int = 900
+    display_timezone: str = "UTC"  # approval.display_timezone: times shown to the approver
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
     channels: list[ChannelConfig] = field(default_factory=list)
@@ -858,6 +872,12 @@ def load_config(path: str = "config.yaml") -> Config:
     approval_timeout = raw.get("approval_timeout", 900)
     if not isinstance(approval_timeout, int) or approval_timeout <= 0:
         raise ConfigError(f"approval_timeout must be a positive integer, got: {approval_timeout!r}")
+    approval_raw = raw.get("approval") or {}
+    if not isinstance(approval_raw, dict):
+        raise ConfigError("approval must be a mapping")
+    if set(approval_raw) - {"display_timezone"}:
+        raise ConfigError("approval: unknown key(s); only display_timezone is supported")
+    display_timezone = parse_timezone(approval_raw.get("display_timezone", "UTC"))
     rate_limit_raw = raw.get("rate_limit", {})
     rate_limit = RateLimitConfig(
         max_pending_approvals=rate_limit_raw.get("max_pending_approvals", 10),
@@ -912,6 +932,7 @@ def load_config(path: str = "config.yaml") -> Config:
         services=services,
         storage=storage,
         approval_timeout=approval_timeout,
+        display_timezone=display_timezone,
         rate_limit=rate_limit,
         mcp=mcp,
         listen=listen,
