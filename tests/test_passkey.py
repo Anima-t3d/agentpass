@@ -131,6 +131,8 @@ class Req:
     risk: str = "high"
     expires_at: float = 0.0
     require: str = "passkey"
+    preview: object = None
+    agent_note: str | None = None
 
 
 class Sink:

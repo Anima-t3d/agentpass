@@ -414,7 +414,7 @@ async def test_v2_database_migrates_to_current(tmp_path):
     await database.initialize()
     assert (await database.get_pending("done"))["state"] == "resolved"
     assert (await database.get_pending("open"))["state"] == "pending"
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
     await database.close()
     assert sqlite3.connect(path).execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 

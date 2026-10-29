@@ -42,6 +42,7 @@ agentpass/
 │   ├── preview/
 │   │   ├── model.py          # Preview/Section/Unavailable dataclasses, digest, JSON round trip
 │   │   ├── service.py        # PreviewService: GET-only lookups + template renderer, never raises
+│   │   ├── renderers.py      # Built-in renderers (entity_state); pure functions, no HTML
 │   │   └── sanitize.py       # control/bidi escape and strip, sanitize_note (agent_note)
 │   ├── dashboard/            # Audit + remembered-rules pages (admin socket): list and revoke only
 │   ├── passkey/
@@ -49,7 +50,7 @@ agentpass/
 │   │   ├── page.py           # Approval page (aiohttp, loopback, private network only)
 │   │   ├── verify.py         # Challenge construction + WebAuthn verification
 │   │   ├── store.py          # Enrolled public keys + enrolment tokens
-│   │   └── assets.py         # Static page assets
+│   │   └── assets.py         # Page HTML, CSS (design tokens, light/dark) and JS; textContent only, no inline style
 │   └── services/
 │       ├── base.py           # ServiceHandler ABC
 │       └── http.py           # Generic HTTP service (any API via YAML)

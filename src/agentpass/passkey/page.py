@@ -46,6 +46,7 @@ from agentpass.passkey.verify import (
     verify_approval_assertion,
     verify_registration,
 )
+from agentpass.preview.sanitize import escape_unsafe
 
 logger = logging.getLogger("agentpass.passkey")
 
@@ -130,6 +131,9 @@ class PendingApproval:
     signature: str = ""
     require: str = "any_trusted"
     extra: dict[str, Any] = field(default_factory=dict)
+    # Gateway-built preview as plain data (Preview.to_dict or {"unavailable": reason}), or None
+    preview: dict[str, Any] | None = None
+    agent_note: str | None = None  # sanitized, unverified agent text
 
     def challenge(self) -> bytes:
         return approval_challenge(
@@ -138,6 +142,30 @@ class PendingApproval:
 
 
 AnswerFn = Callable[[str, Answer], Awaitable[AnswerStatus]]
+
+
+DISPLAY_LIMIT = 20_000  # characters per displayed string; the preview has its own caps
+
+
+def display_safe(value: Any) -> Any:
+    """A copy of ``value`` that is safe to draw: control and bidi characters shown as \\uXXXX
+    and no string longer than DISPLAY_LIMIT, with the cut labelled.
+
+    The page draws everything with ``textContent``, so markup is inert; this covers the
+    characters that reorder or hide text. It is for display only: the passkey challenge
+    is built from the untouched args.
+    """
+    if isinstance(value, str):
+        text = escape_unsafe(value)
+        if len(text) > DISPLAY_LIMIT:
+            extra = len(text) - DISPLAY_LIMIT
+            text = f"{text[:DISPLAY_LIMIT]}… ({extra} more characters not shown)"
+        return text
+    if isinstance(value, dict):
+        return {display_safe(str(k)): display_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [display_safe(v) for v in value]
+    return value
 
 
 def _json(data: Any, status: int = 200) -> web.Response:
@@ -304,11 +332,13 @@ class ApprovalPage:
                 "approval_id": p.approval_id,
                 "agent": p.agent_id,
                 "tool": p.tool,
-                "args": p.args,
+                "args": display_safe(p.args),
                 "risk": p.risk,
                 "expires_at": expires_iso(p.expires_at),
                 "expires_in": max(0, int(p.expires_at - now)),
                 "require": p.require,
+                "preview": display_safe(p.preview),
+                "agent_note": display_safe(p.agent_note),
             }
             for p in self.pending.values()
             if p.expires_at > now

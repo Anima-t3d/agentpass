@@ -86,3 +86,7 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["agentpass"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded CSS and JS: long lines are cheaper to read than wrapped ones
+"src/agentpass/passkey/assets.py" = ["E501"]
