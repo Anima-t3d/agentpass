@@ -28,7 +28,7 @@ from agentpass.config import (
     ConfigError,
     PermissionRule,
     Permissions,
-    approval_warnings,
+    approval_findings,
     is_wildcard_host,
     load_config,
     load_permissions,
@@ -506,8 +506,8 @@ def check(config_path: str, permissions_path: str, env: dict[str, str] | None = 
             lint_permissions(label, perms, registry, report)
             rules = [*perms.defaults, *perms.rules]
             _guard(report, label, validate_rule_channels, rules, config.channels)
-            for message in approval_warnings(rules, config.channels):
-                if "approval.require is passkey" in message:
+            for kind, message in approval_findings(rules, config.channels):
+                if kind == "passkey-without-channel":
                     report.error("approval-passkey", label, message)
                 else:
                     report.warn("approval", label, message)

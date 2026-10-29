@@ -356,20 +356,31 @@ def validate_rule_channels(rules: list[PermissionRule], channels: list[ChannelCo
 
 def approval_warnings(rules: list[PermissionRule], channels: list[ChannelConfig]) -> list[str]:
     """Lint messages for rules whose approval block cannot work with *channels*."""
+    return [message for _kind, message in approval_findings(rules, channels)]
+
+
+def approval_findings(
+    rules: list[PermissionRule], channels: list[ChannelConfig]
+) -> list[tuple[str, str]]:
+    """Like `approval_warnings`, as (kind, message): `passkey-without-channel` or `other`."""
     trusted_types = {c.type for c in channels if c.trust == "trusted"}
-    out = []
+    out: list[tuple[str, str]] = []
     for rule in rules:
         spec = rule.approval
         if spec is None:
             continue
         where = f"{spec.source}: rule {rule.pattern!r}"
         if spec.require in ("telegram", "passkey") and spec.require not in trusted_types:
+            kind = "passkey-without-channel" if spec.require == "passkey" else "other"
             out.append(
-                f"{where}: approval.require is {spec.require} but no trusted "
-                f"{spec.require} channel is configured; requests will be refused"
+                (
+                    kind,
+                    f"{where}: approval.require is {spec.require} but no trusted "
+                    f"{spec.require} channel is configured; requests will be refused",
+                )
             )
         if spec.require is not None and spec.channels is not None and not spec.channels:
-            out.append(f"{where}: approval.channels is empty while require is set")
+            out.append(("other", f"{where}: approval.channels is empty while require is set"))
     return out
 
 

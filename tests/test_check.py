@@ -274,3 +274,17 @@ def test_cli_exit_codes_and_json(tmp_path, capsys):
     with pytest.raises(SystemExit) as err:
         main(["check-config", "--config", cfg, "--permissions", perms])
     assert err.value.code == 1
+
+
+def test_passkey_error_does_not_depend_on_the_message_wording(tmp_path, monkeypatch):
+    import agentpass.check as check_module
+
+    real = check_module.approval_findings
+    monkeypatch.setattr(
+        check_module,
+        "approval_findings",
+        lambda rules, channels: [(k, "reworded") for k, _ in real(rules, channels)],
+    )
+    perms = 'rules:\n  - {pattern: "t_get(*)", action: ask, approval: {require: passkey}}\n'
+    report = check(*write_setup(tmp_path, perms), env={})
+    assert codes(report.errors) == ["approval-passkey"] and not report.warnings

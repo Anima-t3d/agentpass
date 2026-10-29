@@ -16,6 +16,7 @@ from agentpass.config import (
     ConfigError,
     PermissionRule,
     Permissions,
+    approval_findings,
     approval_warnings,
     load_permissions,
     validate_rule_channels,
@@ -243,3 +244,15 @@ def test_empty_channels_with_require_warns(tmp_path):
     perms = load_permissions(_perm_file(tmp_path, "{require: telegram, channels: []}"))
     [warning] = approval_warnings(perms.rules, [ChannelConfig(name="tg", type="telegram")])
     assert "channels is empty" in warning
+
+
+def test_approval_findings_classify_passkey_without_channel_structurally(tmp_path):
+    tg = ChannelConfig(name="tg", type="telegram")
+    passkey_rule = load_permissions(_perm_file(tmp_path, "{require: passkey}"))
+    assert [k for k, _ in approval_findings(passkey_rule.rules, [tg])] == [
+        "passkey-without-channel"
+    ]
+    other = load_permissions(_perm_file(tmp_path, "{require: telegram, channels: []}"))
+    assert [k for k, _ in approval_findings(other.rules, [tg])] == ["other"]
+    pk = ChannelConfig(name="pk", type="passkey")
+    assert approval_findings(passkey_rule.rules, [pk]) == []
