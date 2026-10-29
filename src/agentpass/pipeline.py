@@ -473,6 +473,9 @@ class Pipeline:
             ),
         )
         coordinator_args: dict[str, Any] = {}
+        if getattr(getattr(tool_def, "preview", None), "require_page", False):
+            # preview.require_page: only the page, where the preview is read in full, can approve
+            approval_req.require = "passkey"
         if approval is not None:
             if approval.require is not None:
                 approval_req.require = approval.require

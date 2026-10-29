@@ -29,6 +29,7 @@ from agentpass.approval.channel import (
     Trust,
 )
 from agentpass.config import TelegramConfig
+from agentpass.preview.model import Unavailable
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,30 @@ def passkey_link(origin: str | None) -> str | None:
     return link if link and link.startswith("https://") else None
 
 
+MAX_TELEGRAM_WARNINGS = 3
+
+
+def _preview_lines(req: ApprovalRequest) -> list[str]:
+    """Title, summary and top warnings of the gateway-built preview. Never the agent's note.
+
+    Only the short summary goes to Telegram: messages persist on its servers and show up in
+    notifications. The body, diffs and the rest are on the page.
+    """
+    preview = req.preview
+    if preview is None:
+        return []
+    if isinstance(preview, Unavailable):
+        return [f"📋 Preview unavailable ({preview.reason})"]
+    lines = [f"📋 {preview.title}"]
+    if preview.summary and preview.summary != preview.title:
+        lines.append(preview.summary)
+    lines += [f"⚠ {w}" for w in preview.warnings[:MAX_TELEGRAM_WARNINGS]]
+    hidden = len(preview.warnings) - MAX_TELEGRAM_WARNINGS
+    if hidden > 0:
+        lines.append(f"⚠ and {hidden} more warning{'s' if hidden > 1 else ''} on the page")
+    return lines
+
+
 def message_text(req: ApprovalRequest, passkey_origin: str | None = None) -> str:
     """Signature plus any extra args the signature does not already show."""
     lines = [f"\U0001f6a8 {req.tool}", f"Agent: {req.agent_name or req.agent_id}"]
@@ -72,6 +97,7 @@ def message_text(req: ApprovalRequest, passkey_origin: str | None = None) -> str
             lines.append("🔐 Needs passkey approval")
         else:
             lines.append(f"🔐 Needs passkey approval: {passkey_origin.rstrip('/')}/")
+    lines += _preview_lines(req)
     if req.signature:
         lines.append(req.signature)
     sig_text = req.signature or ""
@@ -167,6 +193,7 @@ class TelegramChannel(ApprovalChannel):
                 row.append(InlineKeyboardButton("Approve with passkey", url=link))
             row.append(InlineKeyboardButton("Deny", callback_data=f"{aid}:n"))
             return InlineKeyboardMarkup([row])
+        link = passkey_link(self._passkey_origin)
         rows = [
             [
                 InlineKeyboardButton("Allow once", callback_data=f"{aid}:y"),
@@ -181,6 +208,8 @@ class TelegramChannel(ApprovalChannel):
             always.append(InlineKeyboardButton("Deny always...", callback_data=f"{aid}:d"))
         if always:
             rows.append(always)
+        if link and req.preview is not None:
+            rows.append([InlineKeyboardButton("Review on the page", url=link)])
         return InlineKeyboardMarkup(rows)
 
     @staticmethod
