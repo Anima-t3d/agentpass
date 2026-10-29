@@ -601,3 +601,30 @@ class TestGenericHTTPServiceMisc:
 
         with pytest.raises(HTTPServiceError, match="not found"):
             await svc.execute("ha_get_state", {"entity_id": "sensor.temp"})
+
+
+class TestLookupRedirects:
+    async def test_lookup_does_not_follow_redirects(self):
+        """A 3xx from a preview lookup is a failure, and the redirect is never followed."""
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
+        hits: list[str] = []
+
+        async def moved(_: web.Request) -> web.Response:
+            hits.append("moved")
+            raise web.HTTPFound("/elsewhere")
+
+        async def elsewhere(_: web.Request) -> web.Response:
+            hits.append("elsewhere")
+            return web.json_response({"leaked": True})
+
+        app = web.Application()
+        app.router.add_get("/api/states/x", moved)
+        app.router.add_get("/elsewhere", elsewhere)
+        async with TestServer(app) as server:
+            svc = GenericHTTPService(_make_ha_config(str(server.make_url(""))))
+            with pytest.raises(HTTPServiceError, match="HTTP 302"):
+                await svc.lookup("/api/states/x", {})
+            await svc.close()
+        assert hits == ["moved"]

@@ -165,6 +165,7 @@ class ApprovalCoordinator:
             signature=req.signature,
             expires_at=_iso(req.expires_at),
             agent_id=req.agent_id,
+            agent_note=req.agent_note,
         )
         waiter = _Waiter(req, asyncio.get_running_loop().create_future())
         self._waiters[approval_id] = waiter  # before send: a fast tap must find it

@@ -85,7 +85,8 @@ _TABLES = [
     agent_id TEXT NOT NULL DEFAULT 'default',
     state TEXT NOT NULL DEFAULT 'pending',
     handles TEXT,
-    preview_json TEXT
+    preview_json TEXT,
+    agent_note TEXT
 )""",
     _IDEMPOTENCY_TABLE,
     _REMEMBERED_TABLE,
@@ -105,7 +106,7 @@ _SCHEMA = ";\n".join([*_TABLES, *_INDEXES]) + ";\n"
 
 # Bump when the schema changes and add a step to _MIGRATIONS. A database with
 # user_version 0 is either brand new or from before versioning (v0 baseline).
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 async def _columns(conn: aiosqlite.Connection, table: str) -> set[str]:
@@ -162,12 +163,19 @@ async def _migrate_to_v5(conn: aiosqlite.Connection) -> None:
             await conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} TEXT")
 
 
+async def _migrate_to_v6(conn: aiosqlite.Connection) -> None:
+    """The pending row keeps the sanitized agent note, so the page shows it after a restart."""
+    if "agent_note" not in await _columns(conn, "pending_requests"):
+        await conn.execute("ALTER TABLE pending_requests ADD COLUMN agent_note TEXT")
+
+
 _MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
     3: _migrate_to_v3,
     4: _migrate_to_v4,
     5: _migrate_to_v5,
+    6: _migrate_to_v6,
 }
 
 
@@ -322,15 +330,26 @@ class Database:
         expires_at: str,
         agent_id: str = "default",
         preview_json: str | None = None,
+        agent_note: str | None = None,
     ) -> None:
         """Insert a pending approval request."""
         conn = self._get_conn()
         args_json = json.dumps(args)
         await conn.execute(
             """INSERT INTO pending_requests
-               (request_id, tool_name, args, signature, expires_at, agent_id, preview_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (request_id, tool_name, args_json, signature, expires_at, agent_id, preview_json),
+               (request_id, tool_name, args, signature, expires_at, agent_id, preview_json,
+                agent_note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                request_id,
+                tool_name,
+                args_json,
+                signature,
+                expires_at,
+                agent_id,
+                preview_json,
+                agent_note,
+            ),
         )
         await conn.commit()
 
@@ -372,7 +391,7 @@ class Database:
         """
         conn = self._get_conn()
         cursor = await conn.execute(
-            "UPDATE pending_requests SET state = ?, preview_json = NULL "
+            "UPDATE pending_requests SET state = ?, preview_json = NULL, agent_note = NULL "
             "WHERE request_id = ? AND state = 'pending'",
             (state, request_id),
         )
@@ -385,7 +404,8 @@ class Database:
         cursor = await conn.execute("SELECT * FROM pending_requests WHERE state = 'pending'")
         rows = [dict(row) for row in await cursor.fetchall()]
         await conn.execute(
-            "UPDATE pending_requests SET state = 'abandoned', preview_json = NULL "
+            "UPDATE pending_requests "
+            "SET state = 'abandoned', preview_json = NULL, agent_note = NULL "
             "WHERE state = 'pending'"
         )
         await conn.commit()

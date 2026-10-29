@@ -263,12 +263,41 @@ async def test_v4_database_migrates_idempotently(tmp_path):
         )
         await database.close()
     check = sqlite3.connect(path)
-    assert check.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
+    assert check.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
     cols = {r[1] for r in check.execute("PRAGMA table_info(audit_log)")}
     assert {"preview_digest", "preview_title", "preview_status", "agent_note"} <= cols
-    assert "preview_json" in {r[1] for r in check.execute("PRAGMA table_info(pending_requests)")}
+    pending = {r[1] for r in check.execute("PRAGMA table_info(pending_requests)")}
+    assert {"preview_json", "agent_note"} <= pending
 
 
 def test_digest_is_stable_json():
     p = Preview(title="t", summary="s", built_at="2026-01-01T00:00:00Z").seal()
     assert p.digest == Preview.from_dict(json.loads(json.dumps(p.to_dict()))).compute_digest()
+
+
+async def test_agent_note_is_stored_on_the_pending_row_and_cleared_on_resolution(db, svc):
+    ch = FakeChannel("tg")
+    coordinator = _coordinator(db, svc, ch)
+    task = await _run(coordinator, ch, _req(agent_note="opening the door for the courier"))
+    assert (await db.get_pending("r1"))["agent_note"] == "opening the door for the courier"
+    await ch.approve("r1")
+    await task
+    assert (await db.get_pending("r1"))["agent_note"] is None
+
+
+async def test_agent_note_cleared_on_timeout_denial_and_restart(db, svc):
+    import time
+
+    ch = FakeChannel("tg")
+    coordinator = _coordinator(db, svc, ch)
+    req = _req("t1", agent_note="n")
+    req.expires_at = time.time() + 0.2
+    assert (await coordinator.request(req)).reason == "timeout"
+    assert (await db.get_pending("t1"))["agent_note"] is None
+    task = await _run(coordinator, ch, _req("d1", agent_note="n"))
+    await ch.deny("d1")
+    await task
+    assert (await db.get_pending("d1"))["agent_note"] is None
+    await db.insert_pending("old", "lock_it", {}, "s", "2999-01-01T00:00:00Z", agent_note="n")
+    await db.abandon_pending()
+    assert (await db.get_pending("old"))["agent_note"] is None

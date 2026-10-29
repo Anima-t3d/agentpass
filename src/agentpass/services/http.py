@@ -189,6 +189,7 @@ class GenericHTTPService(ServiceHandler):
                     params=params or None,
                     headers=headers or None,
                     timeout=aiohttp.ClientTimeout(total=timeout),
+                    allow_redirects=False,  # a redirect could leave the service's own host
                 ) as resp:
                     if (
                         resp.status == 401
