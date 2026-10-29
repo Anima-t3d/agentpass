@@ -6,6 +6,7 @@ Only the HTTP client, the approval channel and the upstream service are fakes.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 from typing import Any
 
@@ -397,6 +398,45 @@ class TestGatewayAudit:
     async def test_audit_limit_validated(self, env):
         r = await call(env, "gateway_audit", {"limit": 0})
         assert r["structuredContent"]["error"]["code"] == "invalid_params"
+
+
+class TestTimeoutAfterLeavingTheRequest:
+    async def test_timeout_after_pending_is_stored_and_never_left_unretrieved(self, env):
+        env.pipeline._approval_timeout = 1
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict] = []
+        loop.set_exception_handler(lambda _loop, ctx: unhandled.append(ctx))
+        try:
+            r = await call(env, "ha_call_service", {"entity_id": "light.a"})
+            rid = r["structuredContent"]["request_id"]
+            assert r["structuredContent"]["status"] == "pending_approval"
+            res = (await call(env, "gateway_result", {"request_id": rid, "wait_seconds": 5}))[
+                "structuredContent"
+            ]
+            assert res["status"] == "timeout" and res["error"]["code"] == "approval_timeout"
+            await asyncio.sleep(0.05)
+            assert not env.mcp._tasks
+            gc.collect()  # "Task exception was never retrieved" is reported on collection
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(None)
+        assert unhandled == []
+
+    async def test_run_call_returns_a_pipeline_error_instead_of_raising(self, env):
+        env.pipeline._approval_timeout = 1
+        task = asyncio.create_task(
+            env.mcp._run_call(
+                env.agents.get("alice"),
+                "ha_call_service",
+                {"entity_id": "x.y"},
+                None,
+                lambda *_: None,
+            )
+        )
+        result = await task
+        assert type(result).__name__ == "ApprovalTimeout" and result.request_id
+        row = await env.db.get_pending(result.request_id)
+        assert row is not None  # stored for a later gateway_result
 
 
 class TestErrorCodes:

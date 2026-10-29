@@ -261,6 +261,7 @@ class McpServer:
         task = asyncio.create_task(self._run_call(identity, name, args, key, on_pending))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._reap)
         waiter = asyncio.create_task(pending.wait())
         try:
             await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
@@ -287,28 +288,33 @@ class McpServer:
         args: dict,
         key: str | None,
         on_pending: Any,
-    ) -> Outcome:
+    ) -> Outcome | PipelineError:
         """Pipeline.process, plus: keep the final result of an approval in the database.
 
         This runs in its own task, so the result is stored whether or not the HTTP
-        request that started it is still waiting.
+        request that started it is still waiting. A pipeline error is the task's
+        *result*, never an exception: the request may have returned `pending_approval`
+        and left, and nobody would retrieve it.
         """
         try:
             outcome = await self._pipeline.process(identity, name, args, key, on_pending=on_pending)
         except PipelineError as e:
             if e.awaiting_delivery and e.request_id:
                 await self._pipeline.store_undelivered(e.request_id, e)
-            raise
+            return e
         if outcome.awaiting_delivery:
             await self._pipeline.store_undelivered(outcome.request_id, outcome)
         return outcome
 
     @staticmethod
+    def _reap(task: asyncio.Task) -> None:
+        """Retrieve the outcome of a finished call so an unexpected failure is logged once."""
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("MCP tool call failed", exc_info=task.exception())
+
+    @staticmethod
     def _outcome(task: asyncio.Task) -> Outcome | PipelineError:
-        try:
-            return task.result()
-        except PipelineError as e:
-            return e
+        return task.result()
 
     @staticmethod
     def _render(result: Outcome | PipelineError) -> dict[str, Any]:
