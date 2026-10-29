@@ -54,11 +54,24 @@ _CLOSED_HEADERS = {
 }
 
 
-def message_text(req: ApprovalRequest) -> str:
+def passkey_link(origin: str | None) -> str | None:
+    """The passkey page URL for a button, or None. Telegram only accepts https URLs."""
+    link = f"{origin.rstrip('/')}/" if origin else None
+    return link if link and link.startswith("https://") else None
+
+
+def message_text(req: ApprovalRequest, passkey_origin: str | None = None) -> str:
     """Signature plus any extra args the signature does not already show."""
     lines = [f"\U0001f6a8 {req.tool}", f"Agent: {req.agent_name or req.agent_id}"]
     if req.risk:
         lines.append(f"Risk: {req.risk}")
+    if req.require == "passkey":
+        if not passkey_origin:
+            lines.append("🔐 Needs passkey approval, but the passkey page is not enabled")
+        elif passkey_link(passkey_origin):
+            lines.append("🔐 Needs passkey approval")
+        else:
+            lines.append(f"🔐 Needs passkey approval: {passkey_origin.rstrip('/')}/")
     if req.signature:
         lines.append(req.signature)
     sig_text = req.signature or ""
@@ -114,8 +127,10 @@ class TelegramChannel(ApprovalChannel):
         name: str = "telegram",
         trust: Trust = "trusted",
         application: Application | None = None,
+        passkey_origin: str | None = None,
     ) -> None:
         self.name = name
+        self._passkey_origin = passkey_origin
         self.trust = trust
         self._config = config
         self._sink: ApprovalSink | None = None
@@ -142,9 +157,16 @@ class TelegramChannel(ApprovalChannel):
         await self._app.shutdown()
         self._sink = None
 
-    @staticmethod
-    def _main_markup(req: ApprovalRequest) -> InlineKeyboardMarkup:
+    def _main_markup(self, req: ApprovalRequest) -> InlineKeyboardMarkup:
         aid = req.approval_id
+        if req.require == "passkey":
+            # Telegram cannot satisfy a passkey rule: lead to the page; a trusted deny is fine
+            row = []
+            link = passkey_link(self._passkey_origin)
+            if link:
+                row.append(InlineKeyboardButton("Approve with passkey", url=link))
+            row.append(InlineKeyboardButton("Deny", callback_data=f"{aid}:n"))
+            return InlineKeyboardMarkup([row])
         rows = [
             [
                 InlineKeyboardButton("Allow once", callback_data=f"{aid}:y"),
@@ -174,7 +196,7 @@ class TelegramChannel(ApprovalChannel):
         return InlineKeyboardMarkup([row, [InlineKeyboardButton("Back", callback_data=f"{aid}:b")]])
 
     async def send(self, req: ApprovalRequest) -> ChannelHandle:
-        text = message_text(req)
+        text = message_text(req, self._passkey_origin)
         msg = await self._app.bot.send_message(
             chat_id=self._config.chat_id, text=text, reply_markup=self._main_markup(req)
         )
@@ -245,7 +267,7 @@ class TelegramChannel(ApprovalChannel):
             await query.answer("This button has expired")
             return
         if code == "b":
-            text, markup = message_text(req), self._main_markup(req)
+            text, markup = message_text(req, self._passkey_origin), self._main_markup(req)
         else:
             approved = code == "a"
             if not (

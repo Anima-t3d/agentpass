@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from types import SimpleNamespace
@@ -426,3 +427,83 @@ def test_resolved_text_names_the_rule():
 
 def test_all_callback_data_fits_telegram_limit():
     assert len(f"{APPROVAL_ID}:ae".encode()) <= 64
+
+
+# --- require: passkey ---
+
+PAGE = "https://gate.example.ts.net"
+
+
+def _passkey_req():
+    return _req(require="passkey", remember=OFFER)
+
+
+async def test_passkey_request_leads_to_the_page_and_offers_no_allow():
+    channel = TelegramChannel(CONFIG, application=_fake_app(), passkey_origin=PAGE)
+    await channel.send(_passkey_req())
+    kwargs = channel.application.bot.send_message.call_args.kwargs
+    assert "🔐 Needs passkey approval" in kwargs["text"]
+    (row,) = kwargs["reply_markup"].inline_keyboard
+    assert [(b.text, b.url, b.callback_data) for b in row] == [
+        ("Approve with passkey", PAGE + "/", None),
+        ("Deny", None, f"{APPROVAL_ID}:n"),
+    ]
+
+
+async def test_passkey_request_without_the_page_says_so_and_keeps_deny():
+    channel = TelegramChannel(CONFIG, application=_fake_app())
+    await channel.send(_passkey_req())
+    kwargs = channel.application.bot.send_message.call_args.kwargs
+    assert "passkey page is not enabled" in kwargs["text"]
+    (row,) = kwargs["reply_markup"].inline_keyboard
+    assert [b.text for b in row] == ["Deny"]
+
+
+async def test_passkey_request_on_a_non_https_origin_puts_the_link_in_the_text():
+    channel = TelegramChannel(CONFIG, application=_fake_app(), passkey_origin="http://127.0.0.1")
+    await channel.send(_passkey_req())
+    kwargs = channel.application.bot.send_message.call_args.kwargs
+    assert "http://127.0.0.1/" in kwargs["text"]
+    assert all(b.url is None for b in kwargs["reply_markup"].inline_keyboard[0])
+
+
+def test_build_channels_hands_the_passkey_origin_to_telegram():
+    on = SimpleNamespace(origin=PAGE + "/", enabled=True)
+    off = SimpleNamespace(origin=PAGE, enabled=False)
+    entry = ChannelConfig("telegram", "telegram", "trusted", CONFIG)
+    assert (
+        build_channels(SimpleNamespace(channels=[entry], passkey=on))[0]._passkey_origin
+        == PAGE + "/"
+    )
+    assert build_channels(SimpleNamespace(channels=[entry], passkey=off))[0]._passkey_origin is None
+
+
+async def test_resolving_on_the_page_edits_the_telegram_message(tmp_path):
+    from agentpass.db import Database
+    from tests.fakes import FakeChannel
+
+    db = Database(str(tmp_path / "t.db"))
+    await db.initialize()
+    telegram = TelegramChannel(CONFIG, application=_fake_app(), passkey_origin=PAGE)
+    page = FakeChannel("passkey", proof_kinds={"webauthn"})
+    from agentpass.approval import ApprovalCoordinator
+
+    coordinator = ApprovalCoordinator(db, [telegram, page])
+    telegram.start = AsyncMock()  # no polling
+    telegram.stop = AsyncMock()
+    await coordinator.start()
+    task = asyncio.create_task(coordinator.request(_passkey_req()))
+    for _ in range(200):
+        if page.sent:
+            break
+        await asyncio.sleep(0.01)
+    status = await coordinator.answer(
+        APPROVAL_ID, Answer(True, "passkey", "pk:1", proof={"kind": "webauthn"})
+    )
+    assert status is AnswerStatus.ACCEPTED
+    outcome = await task
+    assert outcome.approved
+    edit = telegram.application.bot.edit_message_text.call_args.kwargs
+    assert edit["text"].startswith("✅ Approved")
+    await coordinator.stop()
+    await db.close()

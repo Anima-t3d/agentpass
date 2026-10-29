@@ -159,11 +159,16 @@ def test_approval_warnings_are_folded_in(tmp_path):
         '  - {pattern: "t_two(*)", action: ask, approval: {require: telegram, channels: []}}\n'
     )
     report = check(*write_setup(tmp_path, perms), env={})
-    assert codes(report.warnings) == ["approval"] * 2
-    assert "no trusted passkey channel" in report.warnings[0].message
-    assert "channels is empty" in report.warnings[1].message
-    assert report.exit_code() == 2
-    assert report.exit_code(strict=True) == 1
+    assert codes(report.warnings) == ["approval"]
+    assert "channels is empty" in report.warnings[0].message
+
+
+def test_require_passkey_without_a_passkey_channel_is_an_error(tmp_path):
+    perms = 'rules:\n  - {pattern: "t_get(*)", action: ask, approval: {require: passkey}}\n'
+    report = check(*write_setup(tmp_path, perms), env={})
+    assert codes(report.errors) == ["approval-passkey"]
+    assert "no trusted passkey channel" in report.errors[0].message
+    assert report.exit_code() == 1
 
 
 def test_unknown_channel_name_is_an_error(tmp_path):

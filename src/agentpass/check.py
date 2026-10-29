@@ -507,7 +507,10 @@ def check(config_path: str, permissions_path: str, env: dict[str, str] | None = 
             rules = [*perms.defaults, *perms.rules]
             _guard(report, label, validate_rule_channels, rules, config.channels)
             for message in approval_warnings(rules, config.channels):
-                report.warn("approval", label, message)
+                if "approval.require is passkey" in message:
+                    report.error("approval-passkey", label, message)
+                else:
+                    report.warn("approval", label, message)
         report.summary = {
             "services": len(config.services),
             "tools": len(registry.all_tools()),

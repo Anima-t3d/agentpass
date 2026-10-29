@@ -22,11 +22,17 @@ def build_channels(config, db=None) -> list[ApprovalChannel]:
     assertions). It is optional so a config-only test can build channels.
     """
     channels: list[ApprovalChannel] = []
+    page = getattr(config, "passkey", None)
+    origin = page.origin if page and page.enabled else None
     for entry in config.channels:
         if entry.type == "telegram":
             from agentpass.approval.telegram_channel import TelegramChannel
 
-            channels.append(TelegramChannel(entry.telegram, name=entry.name, trust=entry.trust))
+            channels.append(
+                TelegramChannel(
+                    entry.telegram, name=entry.name, trust=entry.trust, passkey_origin=origin
+                )
+            )
         elif entry.type == "passkey":
             from agentpass.passkey.channel import PasskeyChannel
 
@@ -34,7 +40,6 @@ def build_channels(config, db=None) -> list[ApprovalChannel]:
         elif entry.type in ("webhook", "command"):
             from agentpass.approval.notify_channel import NotifyChannel
 
-            origin = config.passkey.origin if config.passkey and config.passkey.enabled else None
             channels.append(NotifyChannel(entry.notify, name=entry.name, link_origin=origin))
         else:
             raise ValueError(f"Unsupported channel type: {entry.type!r}")
