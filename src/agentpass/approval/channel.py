@@ -11,7 +11,10 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from agentpass.preview.model import Preview, Unavailable
 
 Trust = Literal["trusted", "notify"]
 
@@ -80,6 +83,11 @@ class ApprovalRequest:
     require: str = "any_trusted"  # any_trusted | telegram | passkey
     arg_display: dict[str, str] = field(default_factory=dict)  # arg name -> display hint
     remember: RememberOffer | None = None  # None: no "always" buttons
+    # Set by the coordinator for trusted channels only; None for notify channels and tools
+    # without a preview block. Gateway-built, so it is the trusted part of what is shown.
+    preview: Preview | Unavailable | None = None
+    # Unverified agent text, shown in its own labelled box. Trusted channels only.
+    agent_note: str | None = None
 
 
 @dataclass

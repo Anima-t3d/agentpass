@@ -12,7 +12,7 @@ import contextlib
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +29,7 @@ from agentpass.approval.channel import (
 from agentpass.db import Database
 
 if TYPE_CHECKING:
+    from agentpass.preview import Preview, PreviewService, Unavailable
     from agentpass.remembered import RememberedService
 
 logger = logging.getLogger(__name__)
@@ -73,12 +74,14 @@ class ApprovalCoordinator:
         db: Database,
         channels: list[ApprovalChannel],
         remembered: RememberedService | None = None,
+        previews: PreviewService | None = None,
     ) -> None:
         names = [c.name for c in channels]
         if len(set(names)) != len(names):
             raise ValueError(f"Duplicate approval channel names: {names}")
         self._db = db
         self._remembered = remembered
+        self._previews = previews
         self._channels = {c.name: c for c in channels}
         self._active: dict[str, ApprovalChannel] = {}
         self._waiters: dict[str, _Waiter] = {}
@@ -143,11 +146,14 @@ class ApprovalCoordinator:
         *,
         channels: list[str] | None = None,
         on_pending: Any = None,
+        preview_args: dict[str, Any] | None = None,
     ) -> ApprovalOutcome:
         """Ask a human and wait for the resolution.
 
         ``channels`` limits the fan-out to the named channels (default: all).
         ``on_pending(approval_id, expires_at)`` is called once the request is out.
+        ``preview_args`` are the unredacted args the preview is built from (``req.args``
+        may be redacted for display); the default is ``req.args``.
         Raises ``NoChannelError`` (the row is deleted) when no channel that could
         satisfy ``req.require`` accepted it.
         """
@@ -164,7 +170,10 @@ class ApprovalCoordinator:
         self._waiters[approval_id] = waiter  # before send: a fast tap must find it
         try:
             targets = [c for n, c in self._active.items() if channels is None or n in channels]
-            sent = await asyncio.gather(*(self._send(c, req) for c in targets))
+            preview = None
+            if any(c.trust == "trusted" for c in targets):  # notify channels never get one
+                preview = await self._build_preview(req, preview_args)
+            sent = await asyncio.gather(*(self._send(c, req, preview) for c in targets))
             waiter.handles = [h for h in sent if h is not None]
             if not any(self._can_resolve(h.channel, req.require) for h in waiter.handles):
                 await self._db.delete_pending(approval_id)
@@ -277,8 +286,36 @@ class ApprovalCoordinator:
         probe = Answer(approved=True, channel=channel_name, approver_id="", proof=True)
         return satisfies(self._active.get(channel_name), probe, require)
 
-    async def _send(self, channel: ApprovalChannel, req: ApprovalRequest) -> ChannelHandle | None:
+    async def _build_preview(
+        self, req: ApprovalRequest, args: dict[str, Any] | None
+    ) -> Preview | Unavailable | None:
+        """Build, store and record the preview. Never raises: a failure is just no preview."""
+        if self._previews is None:
+            return None
         try:
+            preview = await self._previews.build(req.tool, req.args if args is None else args)
+            if preview is None:
+                return None
+            await self._db.set_pending_preview(req.approval_id, json.dumps(preview.to_dict()))
+            await self._db.update_audit_preview(
+                req.approval_id, preview.digest or None, preview.title or None, preview.status
+            )
+            return preview
+        except Exception:
+            logger.exception("Could not build or store the preview for %s", req.approval_id)
+            return None
+
+    async def _send(
+        self,
+        channel: ApprovalChannel,
+        req: ApprovalRequest,
+        preview: Preview | Unavailable | None = None,
+    ) -> ChannelHandle | None:
+        try:
+            if channel.trust == "trusted":
+                req = replace(req, preview=preview)
+            else:  # notify channels: tool, signature and arg_display only
+                req = replace(req, preview=None, agent_note=None)
             return await channel.send(req)
         except Exception:
             logger.exception("Approval channel %s failed to send %s", channel.name, req.approval_id)

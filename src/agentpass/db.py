@@ -66,7 +66,11 @@ _TABLES = [
     resolved_at TEXT,
     execution_result TEXT,
     agent_id TEXT DEFAULT 'default',
-    remembered_rule_id INTEGER
+    remembered_rule_id INTEGER,
+    preview_digest TEXT,
+    preview_title TEXT,
+    preview_status TEXT,
+    agent_note TEXT
 )""",
     """CREATE TABLE IF NOT EXISTS pending_requests (
     request_id TEXT PRIMARY KEY,
@@ -80,7 +84,8 @@ _TABLES = [
     expires_at TEXT NOT NULL,
     agent_id TEXT NOT NULL DEFAULT 'default',
     state TEXT NOT NULL DEFAULT 'pending',
-    handles TEXT
+    handles TEXT,
+    preview_json TEXT
 )""",
     _IDEMPOTENCY_TABLE,
     _REMEMBERED_TABLE,
@@ -100,7 +105,7 @@ _SCHEMA = ";\n".join([*_TABLES, *_INDEXES]) + ";\n"
 
 # Bump when the schema changes and add a step to _MIGRATIONS. A database with
 # user_version 0 is either brand new or from before versioning (v0 baseline).
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 async def _columns(conn: aiosqlite.Connection, table: str) -> set[str]:
@@ -147,7 +152,23 @@ async def _migrate_to_v4(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE audit_log ADD COLUMN remembered_rule_id INTEGER")
 
 
-_MIGRATIONS = {1: _migrate_to_v1, 2: _migrate_to_v2, 3: _migrate_to_v3, 4: _migrate_to_v4}
+async def _migrate_to_v5(conn: aiosqlite.Connection) -> None:
+    """Approval previews: the pending preview, and its trace plus the agent note in audit."""
+    if "preview_json" not in await _columns(conn, "pending_requests"):
+        await conn.execute("ALTER TABLE pending_requests ADD COLUMN preview_json TEXT")
+    audit = await _columns(conn, "audit_log")
+    for column in ("preview_digest", "preview_title", "preview_status", "agent_note"):
+        if column not in audit:
+            await conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} TEXT")
+
+
+_MIGRATIONS = {
+    1: _migrate_to_v1,
+    2: _migrate_to_v2,
+    3: _migrate_to_v3,
+    4: _migrate_to_v4,
+    5: _migrate_to_v5,
+}
 
 
 async def _migrate(conn: aiosqlite.Connection) -> None:
@@ -218,8 +239,8 @@ class Database:
             """INSERT INTO audit_log
                (timestamp, request_id, tool_name, args, signature, decision,
                 resolution, resolved_by, resolved_at, execution_result, agent_id,
-                remembered_rule_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                remembered_rule_id, preview_digest, preview_title, preview_status, agent_note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 timestamp,
                 entry.request_id,
@@ -233,6 +254,10 @@ class Database:
                 result_json,
                 entry.agent_id,
                 entry.remembered_rule_id,
+                entry.preview_digest,
+                entry.preview_title,
+                entry.preview_status,
+                entry.agent_note,
             ),
         )
         await conn.commit()
@@ -282,6 +307,10 @@ class Database:
             execution_result=execution_result,
             agent_id=row.get("agent_id", "default"),
             remembered_rule_id=row.get("remembered_rule_id"),
+            preview_digest=row.get("preview_digest"),
+            preview_title=row.get("preview_title"),
+            preview_status=row.get("preview_status"),
+            agent_note=row.get("agent_note"),
         )
 
     async def insert_pending(
@@ -292,15 +321,38 @@ class Database:
         signature: str,
         expires_at: str,
         agent_id: str = "default",
+        preview_json: str | None = None,
     ) -> None:
         """Insert a pending approval request."""
         conn = self._get_conn()
         args_json = json.dumps(args)
         await conn.execute(
             """INSERT INTO pending_requests
-               (request_id, tool_name, args, signature, expires_at, agent_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (request_id, tool_name, args_json, signature, expires_at, agent_id),
+               (request_id, tool_name, args, signature, expires_at, agent_id, preview_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (request_id, tool_name, args_json, signature, expires_at, agent_id, preview_json),
+        )
+        await conn.commit()
+
+    async def set_pending_preview(self, request_id: str, preview_json: str) -> None:
+        """Store the preview of a request that is still pending (private data: see transition)."""
+        conn = self._get_conn()
+        await conn.execute(
+            "UPDATE pending_requests SET preview_json = ? "
+            "WHERE request_id = ? AND state = 'pending'",
+            (preview_json, request_id),
+        )
+        await conn.commit()
+
+    async def update_audit_preview(
+        self, request_id: str, digest: str | None, title: str | None, status: str
+    ) -> None:
+        """Record which preview the approver was shown: digest, title and status only."""
+        conn = self._get_conn()
+        await conn.execute(
+            "UPDATE audit_log SET preview_digest = ?, preview_title = ?, preview_status = ? "
+            "WHERE request_id = ?",
+            (digest, title, status, request_id),
         )
         await conn.commit()
 
@@ -313,10 +365,15 @@ class Database:
         await conn.commit()
 
     async def transition_pending(self, request_id: str, state: str) -> bool:
-        """Atomically move a ``pending`` row to *state*; True only for the caller that did it."""
+        """Atomically move a ``pending`` row to *state*; True only for the caller that did it.
+
+        The stored preview is dropped with the transition: it may hold private data and is
+        only needed while the request is open.
+        """
         conn = self._get_conn()
         cursor = await conn.execute(
-            "UPDATE pending_requests SET state = ? WHERE request_id = ? AND state = 'pending'",
+            "UPDATE pending_requests SET state = ?, preview_json = NULL "
+            "WHERE request_id = ? AND state = 'pending'",
             (state, request_id),
         )
         await conn.commit()
@@ -328,7 +385,8 @@ class Database:
         cursor = await conn.execute("SELECT * FROM pending_requests WHERE state = 'pending'")
         rows = [dict(row) for row in await cursor.fetchall()]
         await conn.execute(
-            "UPDATE pending_requests SET state = 'abandoned' WHERE state = 'pending'"
+            "UPDATE pending_requests SET state = 'abandoned', preview_json = NULL "
+            "WHERE state = 'pending'"
         )
         await conn.commit()
         return rows

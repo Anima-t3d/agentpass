@@ -14,6 +14,18 @@ class ServiceHandler(ABC):
         """Execute a tool call and return the result."""
         ...
 
+    async def lookup(
+        self,
+        path: str,
+        args: dict[str, Any],
+        *,
+        query: dict[str, str] | None = None,
+        timeout: float = 2.0,
+        max_bytes: int = 262144,
+    ) -> Any:
+        """Read-only GET for approval previews. Optional: raise ``LookupError`` if unsupported."""
+        raise LookupError("service does not support preview lookups")
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Check if the service is reachable."""

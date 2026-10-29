@@ -414,7 +414,7 @@ async def test_v2_database_migrates_to_current(tmp_path):
     await database.initialize()
     assert (await database.get_pending("done"))["state"] == "resolved"
     assert (await database.get_pending("open"))["state"] == "pending"
-    assert SCHEMA_VERSION == 4
+    assert SCHEMA_VERSION == 5
     await database.close()
     assert sqlite3.connect(path).execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
@@ -447,4 +447,4 @@ async def test_v3_database_migrates_to_remembered_rules(tmp_path):
     assert entry.request_id == "old" and entry.remembered_rule_id is None
     assert await database.list_remembered_rules() == []
     await database.close()
-    assert sqlite3.connect(path).execute("PRAGMA user_version").fetchone()[0] == 4
+    assert sqlite3.connect(path).execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION

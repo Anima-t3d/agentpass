@@ -36,6 +36,7 @@ from agentpass.executor import Executor
 from agentpass.listen import bind_group_socket, remove_socket
 from agentpass.mcp import McpServer
 from agentpass.models import Decision
+from agentpass.preview import PreviewService
 from agentpass.registry import build_registry
 from agentpass.remembered import RememberedService, format_summary
 from agentpass.server import GatewayServer
@@ -430,7 +431,9 @@ async def run(args: argparse.Namespace) -> None:
     logger.info("Remembered rules: %s", format_summary(await remembered.counts()))
 
     # 8. Approval channels and coordinator
-    coordinator = ApprovalCoordinator(db, build_channels(config, db=db), remembered)
+    coordinator = ApprovalCoordinator(
+        db, build_channels(config, db=db), remembered, PreviewService(registry, services)
+    )
 
     # 9. Initialize gateway server
     gateway = GatewayServer(

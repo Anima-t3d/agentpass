@@ -161,6 +161,59 @@ class GenericHTTPService(ServiceHandler):
                 return data
         raise HTTPServiceError("Service authentication failed")  # unreachable
 
+    async def lookup(
+        self,
+        path: str,
+        args: dict[str, Any],
+        *,
+        query: dict[str, str] | None = None,
+        timeout: float = 2.0,
+        max_bytes: int = 262144,
+    ) -> Any:
+        """GET ``path`` on this service for an approval preview and return the parsed JSON.
+
+        Same credentials and URL building as a normal call (the host is the service's own,
+        path values are percent-encoded per segment). GET only, with its own timeout and
+        a hard cap on the body. Failures carry the status or a fixed reason, never the body.
+        """
+        url = f"{self._base_url}{self._interpolate_path(path, args)}"
+        params = self._build_query(query, args)
+        if self._config.auth.type == "query":
+            params[self._config.auth.query_param] = self._config.auth.token
+        session = self._get_session()
+        try:
+            for attempt in (0, 1):
+                headers = await self._provider.header() if self._provider is not None else {}
+                async with session.get(
+                    url,
+                    params=params or None,
+                    headers=headers or None,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    if (
+                        resp.status == 401
+                        and attempt == 0
+                        and self._provider is not None
+                        and await self._provider.on_unauthorized(headers)
+                    ):
+                        continue
+                    if not 200 <= resp.status < 300:
+                        raise HTTPServiceError(f"HTTP {resp.status}")
+                    if resp.content_length is not None and resp.content_length > max_bytes:
+                        raise HTTPServiceError("response too large")
+                    raw = await resp.content.read(max_bytes + 1)
+                    if len(raw) > max_bytes:
+                        raise HTTPServiceError("response too large")
+                    try:
+                        return json.loads(raw) if raw else {}
+                    except ValueError:
+                        raise HTTPServiceError("response is not JSON") from None
+        except TokenRefreshError as exc:
+            raise HTTPServiceError("authentication failed") from exc
+        except aiohttp.ClientError as exc:
+            raise HTTPServiceError("service unreachable") from exc
+        raise HTTPServiceError("authentication failed")
+
     @staticmethod
     async def _read_response(resp: aiohttp.ClientResponse, tool: ToolDefinition) -> Any:
         """Read the body according to ``response.type`` and ``response.max_bytes``."""

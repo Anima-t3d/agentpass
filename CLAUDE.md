@@ -39,6 +39,10 @@ agentpass/
 │   │   ├── coordinator.py    # ApprovalCoordinator: pending row, fan-out, timeout, answer race
 │   │   ├── telegram_channel.py # Telegram Guardian bot (PTB v21)
 │   │   └── notify_channel.py # Display-only webhook/command notify channels
+│   ├── preview/
+│   │   ├── model.py          # Preview/Section/Unavailable dataclasses, digest, JSON round trip
+│   │   ├── service.py        # PreviewService: GET-only lookups + template renderer, never raises
+│   │   └── sanitize.py       # control/bidi escape and strip, sanitize_note (agent_note)
 │   ├── dashboard/            # Audit + remembered-rules pages (admin socket): list and revoke only
 │   ├── passkey/
 │   │   ├── channel.py        # Passkey approval channel

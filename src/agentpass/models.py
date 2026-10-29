@@ -52,3 +52,7 @@ class AuditEntry:
     execution_result: dict[str, Any] | None = None
     agent_id: str = "default"
     remembered_rule_id: int | None = None
+    preview_digest: str | None = None
+    preview_title: str | None = None
+    preview_status: str | None = None  # ok | partial | unavailable:<reason>
+    agent_note: str | None = None  # sanitized, unverified text from the agent

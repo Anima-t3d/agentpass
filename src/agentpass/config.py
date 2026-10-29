@@ -229,6 +229,63 @@ class ResponseDefinition:
     max_bytes: int | None = None
 
 
+RESERVED_ARG_NAMES = ("agent_note", "idempotency_key")  # gateway-added properties on every tool
+PREVIEW_RENDERERS = ("template", "email", "diff", "entity_state", "resource_summary")
+PREVIEW_ON_ERROR = ("unavailable", "omit")
+PREVIEW_COMPARISONS = ("equals", "in", "not_in", "endswith_not")
+PREVIEW_MAX_LOOKUPS = 5
+PREVIEW_MAX_FIELDS = 50
+PREVIEW_MAX_WARNINGS = 20
+PREVIEW_MAX_CHARS = 20000
+PREVIEW_DEFAULT_MAX_CHARS = 2000
+PREVIEW_MAX_LOOKUP_TIMEOUT = 10.0
+PREVIEW_DEFAULT_LOOKUP_TIMEOUT = 2.0
+
+
+@dataclass
+class PreviewLookup:
+    """A read-only GET the gateway makes (with the tool's own service) to build a preview."""
+
+    id: str
+    path: str  # "/api/states/{entity_id}", over declared args
+    method: str = "GET"
+    query: dict[str, str] | None = None
+    on_error: str = "unavailable"  # unavailable | omit
+    timeout: float = PREVIEW_DEFAULT_LOOKUP_TIMEOUT
+
+
+@dataclass
+class PreviewField:
+    label: str
+    value: str  # template over args and lookup results
+
+
+@dataclass
+class PreviewWarning:
+    """``text`` is shown when ``value`` satisfies the one comparison."""
+
+    text: str
+    value: str  # template
+    comparison: str  # one of PREVIEW_COMPARISONS
+    operand: Any = None  # str for equals/endswith_not, list[str] for in/not_in
+
+
+@dataclass
+class PreviewSpec:
+    """A tool's ``preview:`` block (docs/APPROVAL-PREVIEWS.md section 2)."""
+
+    renderer: str = "template"
+    lookups: list[PreviewLookup] = field(default_factory=list)
+    title: str = ""
+    summary: str = ""
+    fields: list[PreviewField] = field(default_factory=list)
+    warnings: list[PreviewWarning] = field(default_factory=list)
+    max_chars: int = PREVIEW_DEFAULT_MAX_CHARS
+    confirm_text: str | None = None  # template: typed confirmation on the page
+    require_page: bool = False  # hide Telegram approve buttons (part 2)
+    params: dict[str, Any] = field(default_factory=dict)  # built-in renderer parameters
+
+
 @dataclass
 class ToolDefinition:
     name: str
@@ -242,6 +299,7 @@ class ToolDefinition:
     store_result: str = "full"  # none | truncated | full
     risk: str | None = None  # low | medium | high; display hint and MCP annotations
     remember: str = "args"  # what "Allow always, exact" matches: args (all) | signature
+    preview: PreviewSpec | None = None
 
 
 @dataclass
@@ -1022,10 +1080,187 @@ def _check_template(label: str, template: Any, args: dict[str, ArgDefinition]) -
             raise ConfigError(f"{label}: references undeclared arg {ref!r}")
 
 
+_PREVIEW_REF_RE = re.compile(r"\{(\w+)((?:\.[\w-]+)*)\}")
+_PREVIEW_COMMON_KEYS = {
+    "renderer",
+    "lookups",
+    "title",
+    "summary",
+    "fields",
+    "warnings",
+    "max_chars",
+    "confirm_text",
+    "require_page",
+}
+_PREVIEW_LOOKUP_KEYS = {"id", "method", "path", "query", "on_error", "timeout"}
+
+
+def _preview_template(label: str, template: Any, roots: set[str]) -> str:
+    """Check a preview template: ``{arg}`` or ``{lookup_id.json.path}`` over known roots."""
+    if not isinstance(template, str):
+        raise ConfigError(f"{label}: must be a string")
+    for root, _ in _PREVIEW_REF_RE.findall(template):
+        if root not in roots:
+            raise ConfigError(
+                f"{label}: references {root!r}, which is not a declared arg or lookup"
+            )
+    return template
+
+
+def _parse_preview_lookup(where: str, i: int, raw: Any, args: dict, seen: list) -> PreviewLookup:
+    lw = f"{where} lookup #{i + 1}"
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{lw}: must be a mapping")
+    bad = set(raw) - _PREVIEW_LOOKUP_KEYS
+    if bad:
+        raise ConfigError(f"{lw}: unknown key(s): {', '.join(sorted(map(str, bad)))}")
+    lid = raw.get("id")
+    if not isinstance(lid, str) or not re.fullmatch(r"[A-Za-z_]\w*", lid):
+        raise ConfigError(f"{lw}: id must be a name (letters, digits, underscore)")
+    lw = f"{where} lookup '{lid}'"
+    if lid in args:
+        raise ConfigError(f"{lw}: id collides with an arg of the same name")
+    if any(lid == other.id for other in seen):
+        raise ConfigError(f"{lw}: duplicate lookup id")
+    method = str(raw.get("method", "GET")).upper()
+    if method not in ("GET", "HEAD"):
+        raise ConfigError(f"{lw}: lookups are read-only; method must be GET (got {method!r})")
+    path = raw.get("path")
+    if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+        raise ConfigError(f"{lw}: path must start with a single '/' (the host is fixed)")
+    if "://" in path or "\\" in path:
+        raise ConfigError(f"{lw}: path must not contain a scheme or backslash")
+    _check_template(f"{lw} path", path, args)
+    for ref in _TEMPLATE_REF_RE.findall(path):
+        if not args[ref].required:
+            raise ConfigError(f"{lw}: path arg {ref!r} must be required")
+    query = raw.get("query")
+    if query is not None:
+        if not isinstance(query, dict):
+            raise ConfigError(f"{lw}: query must be a mapping")
+        for k, v in query.items():
+            _check_template(f"{lw} query '{k}'", v, args)
+    on_error = raw.get("on_error", "unavailable")
+    if on_error not in PREVIEW_ON_ERROR:
+        raise ConfigError(f"{lw}: on_error must be one of {PREVIEW_ON_ERROR}")
+    timeout = raw.get("timeout", PREVIEW_DEFAULT_LOOKUP_TIMEOUT)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not 0 < timeout <= PREVIEW_MAX_LOOKUP_TIMEOUT
+    ):
+        raise ConfigError(f"{lw}: timeout must be above 0 and at most {PREVIEW_MAX_LOOKUP_TIMEOUT}")
+    return PreviewLookup(lid, path, method, query, on_error, float(timeout))
+
+
+def _parse_preview_warning(ww: str, raw: Any, roots: set[str]) -> PreviewWarning:
+    if not isinstance(raw, dict) or set(raw) != {"when", "text"}:
+        raise ConfigError(f"{ww}: must be a mapping with when and text")
+    text = _preview_template(f"{ww} text", raw["text"], roots)
+    when = raw["when"]
+    if not isinstance(when, dict) or "value" not in when:
+        raise ConfigError(f"{ww}: when needs a value and one comparison")
+    ops = [k for k in when if k != "value"]
+    if len(ops) != 1 or ops[0] not in PREVIEW_COMPARISONS:
+        raise ConfigError(f"{ww}: when takes exactly one of {PREVIEW_COMPARISONS}")
+    op, operand = ops[0], when[ops[0]]
+    if op in ("in", "not_in"):
+        if not isinstance(operand, list) or not all(isinstance(x, (str, int)) for x in operand):
+            raise ConfigError(f"{ww}: {op} needs a list of strings")
+        operand = [str(x) for x in operand]
+    elif isinstance(operand, bool) or not isinstance(operand, (str, int, float)):
+        raise ConfigError(f"{ww}: {op} needs a string")
+    else:
+        operand = str(operand)
+    return PreviewWarning(text, _preview_template(f"{ww} value", when["value"], roots), op, operand)
+
+
+def _parse_preview(where: str, data: Any, args: dict[str, ArgDefinition]) -> PreviewSpec:
+    where = f"{where} preview"
+    if not isinstance(data, dict):
+        raise ConfigError(f"{where}: must be a mapping")
+    renderer = data.get("renderer") or "template"
+    if renderer not in PREVIEW_RENDERERS:
+        raise ConfigError(f"{where}: unknown renderer {renderer!r} (one of {PREVIEW_RENDERERS})")
+    unknown = set(data) - _PREVIEW_COMMON_KEYS
+    if renderer == "template" and unknown:
+        raise ConfigError(f"{where}: unknown key(s): {', '.join(sorted(map(str, unknown)))}")
+    params = {k: data[k] for k in unknown}  # built-in renderers take their own parameters
+
+    max_chars = data.get("max_chars", PREVIEW_DEFAULT_MAX_CHARS)
+    if (
+        isinstance(max_chars, bool)
+        or not isinstance(max_chars, int)
+        or not 1 <= max_chars <= PREVIEW_MAX_CHARS
+    ):
+        raise ConfigError(f"{where}: max_chars must be an integer from 1 to {PREVIEW_MAX_CHARS}")
+    require_page = data.get("require_page", False)
+    if not isinstance(require_page, bool):
+        raise ConfigError(f"{where}: require_page must be true or false")
+
+    lookups_raw = data.get("lookups") or []
+    if not isinstance(lookups_raw, list):
+        raise ConfigError(f"{where}: lookups must be a list")
+    if len(lookups_raw) > PREVIEW_MAX_LOOKUPS:
+        raise ConfigError(f"{where}: at most {PREVIEW_MAX_LOOKUPS} lookups")
+    lookups: list[PreviewLookup] = []
+    for i, raw in enumerate(lookups_raw):
+        lookups.append(_parse_preview_lookup(where, i, raw, args, lookups))
+
+    roots = set(args) | {lk.id for lk in lookups}
+    title = _preview_template(f"{where} title", data.get("title", ""), roots)
+    summary = _preview_template(f"{where} summary", data.get("summary", ""), roots)
+    confirm_text = data.get("confirm_text")
+    if confirm_text is not None:
+        confirm_text = _preview_template(f"{where} confirm_text", confirm_text, roots)
+
+    fields_raw = data.get("fields") or []
+    if not isinstance(fields_raw, list):
+        raise ConfigError(f"{where}: fields must be a list")
+    if len(fields_raw) > PREVIEW_MAX_FIELDS:
+        raise ConfigError(f"{where}: at most {PREVIEW_MAX_FIELDS} fields")
+    fields: list[PreviewField] = []
+    for i, raw in enumerate(fields_raw):
+        fw = f"{where} field #{i + 1}"
+        if not isinstance(raw, dict) or set(raw) != {"label", "value"}:
+            raise ConfigError(f"{fw}: must be a mapping with label and value")
+        label = _preview_template(f"{fw} label", raw["label"], roots)
+        fields.append(PreviewField(label, _preview_template(f"{fw} value", raw["value"], roots)))
+    if renderer == "template" and not fields:
+        raise ConfigError(f"{where}: the template renderer needs at least one field")
+
+    warnings_raw = data.get("warnings") or []
+    if not isinstance(warnings_raw, list):
+        raise ConfigError(f"{where}: warnings must be a list")
+    if len(warnings_raw) > PREVIEW_MAX_WARNINGS:
+        raise ConfigError(f"{where}: at most {PREVIEW_MAX_WARNINGS} warnings")
+    warnings = [
+        _parse_preview_warning(f"{where} warning #{i + 1}", raw, roots)
+        for i, raw in enumerate(warnings_raw)
+    ]
+
+    return PreviewSpec(
+        renderer=renderer,
+        lookups=lookups,
+        title=title,
+        summary=summary,
+        fields=fields,
+        warnings=warnings,
+        max_chars=max_chars,
+        confirm_text=confirm_text,
+        require_page=require_page,
+        params=params,
+    )
+
+
 def _parse_tool(tool_name: str, data: dict, service_name: str) -> ToolDefinition:
     where = f"tool '{tool_name}'"
     args: dict[str, ArgDefinition] = {}
     for arg_name, arg_data in (data.get("args") or {}).items():
+        if arg_name in RESERVED_ARG_NAMES:
+            raise ConfigError(
+                f"{where}: arg name {arg_name!r} is reserved (the gateway adds it to every tool)"
+            )
         args[arg_name] = _parse_arg(f"{where} arg '{arg_name}'", arg_data)
 
     signature = data.get("signature", "")
@@ -1117,6 +1352,7 @@ def _parse_tool(tool_name: str, data: dict, service_name: str) -> ToolDefinition
     remember = data.get("remember", "args")
     if remember not in REMEMBER_MODES:
         raise ConfigError(f"{where}: remember must be one of {REMEMBER_MODES}")
+    preview = _parse_preview(where, data["preview"], args) if data.get("preview") else None
 
     return ToolDefinition(
         name=tool_name,
@@ -1130,4 +1366,5 @@ def _parse_tool(tool_name: str, data: dict, service_name: str) -> ToolDefinition
         store_result=store_result,
         risk=risk,
         remember=remember,
+        preview=preview,
     )

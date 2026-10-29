@@ -288,3 +288,61 @@ def test_passkey_error_does_not_depend_on_the_message_wording(tmp_path, monkeypa
     perms = 'rules:\n  - {pattern: "t_get(*)", action: ask, approval: {require: passkey}}\n'
     report = check(*write_setup(tmp_path, perms), env={})
     assert codes(report.errors) == ["approval-passkey"] and not report.warnings
+
+
+def _preview_config(tmp_path, tools_yaml: str, handler: str = "http"):
+    (tmp_path / "tools.yaml").write_text(tools_yaml)
+    (tmp_path / "gateway.yaml").write_text(
+        f"""\
+gateway: {{health_port: 8210}}
+{LISTEN}
+agent: {{token: t}}
+messenger: {{type: telegram, telegram: {{token: t, chat_id: 1, allowed_users: [1]}}}}
+services:
+  svc: {{url: 'http://localhost', auth: {{type: bearer, token: t}}, handler: {handler},
+    tools: '{tmp_path / "tools.yaml"}'}}
+storage: {{type: sqlite, path: ./d.db}}
+"""
+    )
+    (tmp_path / "permissions.yaml").write_text("defaults: []\nrules: []\n")
+    return check(str(tmp_path / "gateway.yaml"), str(tmp_path / "permissions.yaml"))
+
+
+PREVIEW_TOOL = """\
+tools:
+  t:
+    args: {id: {required: true}}
+    request: {method: GET, path: "/x"}
+    preview:
+      %s
+"""
+
+
+def test_bad_preview_block_is_a_config_error(tmp_path):
+    report = _preview_config(
+        tmp_path,
+        PREVIEW_TOOL
+        % 'lookups: [{id: s, method: POST, path: "/s/{id}"}]\n      fields: [{label: a, value: b}]',
+    )
+    assert report.exit_code() == 1
+    assert any("read-only" in f.message for f in report.errors)
+
+
+def test_reserved_arg_name_is_a_config_error(tmp_path):
+    report = _preview_config(
+        tmp_path, "tools:\n  t:\n    args: {agent_note: {}}\n    request: {method: GET, path: /x}\n"
+    )
+    assert report.exit_code() == 1
+    assert any("reserved" in f.message for f in report.errors)
+
+
+def test_unimplemented_renderer_warns(tmp_path):
+    report = _preview_config(tmp_path, PREVIEW_TOOL % "renderer: email")
+    assert not report.errors
+    assert [f.code for f in report.warnings] == ["preview-renderer-unavailable"]
+    assert report.exit_code(strict=True) == 1
+
+
+def test_clean_preview_block_passes(tmp_path):
+    report = _preview_config(tmp_path, PREVIEW_TOOL % 'fields: [{label: Id, value: "{id}"}]')
+    assert report.exit_code() == 0

@@ -53,7 +53,17 @@ CONFIG_KEYS = {
     "passkey",
 }
 PERMISSIONS_KEYS = {"defaults", "rules"}
-TOOL_KEYS = {"description", "signature", "args", "request", "response", "audit", "risk", "remember"}
+TOOL_KEYS = {
+    "description",
+    "signature",
+    "args",
+    "request",
+    "response",
+    "audit",
+    "risk",
+    "remember",
+    "preview",
+}
 
 # ${NAME}, ${env:NAME}, ${secret:name}. Only the bare form is substituted by the loader today.
 _REF_RE = re.compile(r"\$\{(?:(env|secret):)?([\w.-]+)\}")
@@ -410,6 +420,32 @@ def _lint_listen(config: Config, report: Report) -> None:
             )
 
 
+def _lint_previews(config: Config, registry: ToolRegistry, report: Report) -> None:
+    """Preview lints that need the whole registry (the block itself is validated at load)."""
+    from agentpass.preview.service import IMPLEMENTED_RENDERERS
+
+    for tool in registry.all_tools():
+        where = f"tool {tool.name!r}"
+        spec = tool.preview
+        if spec is None:
+            continue
+        service = config.services.get(tool.service_name)
+        if spec.lookups and service is not None and service.handler != "http":
+            report.warn(
+                "preview-lookup-unsupported",
+                where,
+                f"preview lookups need an http service; {tool.service_name!r} uses "
+                f"handler {service.handler!r}, so the preview will be unavailable",
+            )
+        if spec.renderer not in IMPLEMENTED_RENDERERS:
+            report.warn(
+                "preview-renderer-unavailable",
+                where,
+                f"renderer {spec.renderer!r} is not implemented yet; the preview will be "
+                "unavailable",
+            )
+
+
 def _lint_health_and_dashboard(config: Config, report: Report) -> None:
     """healthz port must not hit a reserved port; the dashboard on TCP needs auth and warns."""
     reserved = set(config.gateway.reserved_ports)
@@ -519,6 +555,7 @@ def check(config_path: str, permissions_path: str, env: dict[str, str] | None = 
             "rule_sets": len(policies),
         }
         _lint_remembered(config, registry, agents, report)
+        _lint_previews(config, registry, report)
     elif config is not None or permissions is not None:
         report.skipped.append("rule lints (registry could not be built)")
 
