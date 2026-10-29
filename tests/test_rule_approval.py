@@ -153,7 +153,7 @@ async def test_no_approval_block_is_a_plain_coordinator_call():
     with pytest.raises(RuntimeError):
         await p.process("a", "tool", {})
     [call] = coordinator.request.call_args_list
-    assert set(call.kwargs) == {"on_pending"}
+    assert set(call.kwargs) == {"on_pending", "preview_args"}
     assert call.args[0].require == "any_trusted"
     assert call.args[0].expires_at - time.time() == pytest.approx(77, abs=2)
 

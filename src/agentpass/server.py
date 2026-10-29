@@ -35,7 +35,8 @@ from agentpass.pipeline import (
     ServiceUnauthorized,
     UnknownTool,
 )
-from agentpass.schema import args_to_json_schema, tool_annotations
+from agentpass.preview import sanitize_note
+from agentpass.schema import args_to_json_schema, tool_annotations, with_gateway_properties
 
 __all__ = ["GatewayServer", "RateLimiter"]
 
@@ -313,7 +314,15 @@ class GatewayServer:
 
         result: Outcome | PipelineError
         try:
-            result = await self._pipeline.process(ctx.identity, tool_name, args)
+            # The note is popped here, before validation, signature or hashing see the args
+            note = None
+            if isinstance(args, dict) and "agent_note" in args:
+                args = dict(args)
+                try:
+                    note = sanitize_note(args.pop("agent_note"))
+                except ValueError as e:
+                    raise InvalidParams(str(e)) from None
+            result = await self._pipeline.process(ctx.identity, tool_name, args, agent_note=note)
         except PipelineError as e:
             result = e
 
@@ -371,7 +380,7 @@ class GatewayServer:
                     "description": tool_def.description,
                     "service": tool_def.service_name,
                     "args": args_schema,
-                    "inputSchema": args_to_json_schema(tool_def.args),
+                    "inputSchema": with_gateway_properties(args_to_json_schema(tool_def.args)),
                     "annotations": tool_annotations(tool_def),
                     "risk": tool_def.risk,
                 }

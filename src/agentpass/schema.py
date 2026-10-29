@@ -64,6 +64,31 @@ def args_to_json_schema(args: dict[str, ArgDefinition]) -> dict[str, Any]:
     return schema
 
 
+AGENT_NOTE_PROPERTY: dict[str, Any] = {
+    "type": "string",
+    "maxLength": 500,
+    "description": (
+        "Optional: explain to the human approver why you need this call. "
+        "Shown to them as unverified agent text."
+    ),
+}
+
+
+def with_gateway_properties(
+    schema: dict[str, Any], *, idempotency_key: bool = False
+) -> dict[str, Any]:
+    """Add the gateway-owned optional properties to a tool's object schema (in place).
+
+    ``agent_note`` (and ``idempotency_key`` on MCP) are popped by the transport adapter
+    before the pipeline sees the args, so they are not part of the tool's declared args.
+    """
+    props = schema.setdefault("properties", {})
+    props["agent_note"] = dict(AGENT_NOTE_PROPERTY)
+    if idempotency_key:
+        props["idempotency_key"] = {"type": "string"}
+    return schema
+
+
 def input_schema(args: dict[str, ArgDefinition]) -> dict[str, Any]:
     """MCP ``inputSchema`` for a tool. Same converter, transport-facing name."""
     return args_to_json_schema(args)

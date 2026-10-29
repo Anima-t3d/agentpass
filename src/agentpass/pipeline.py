@@ -151,9 +151,10 @@ IDEMPOTENCY_TTL = 24 * 3600  # seconds a finished keyed call stays replayable
 class _KeyedCall:
     """One in-flight or finished call registered under an idempotency key."""
 
-    def __init__(self, tool: str, args: Any) -> None:
+    def __init__(self, tool: str, args: Any, note: str | None = None) -> None:
         self.tool = tool
         self.args = args
+        self.note = note  # first note wins; a replay with another note joins this call
         self.task: asyncio.Task[Outcome] | None = None
         self.pending: tuple[str, float] | None = None
         self.callbacks: list[PendingCallback] = []
@@ -238,8 +239,13 @@ class Pipeline:
         args: Any,
         idempotency_key: str | None = None,
         on_pending: PendingCallback | None = None,
+        agent_note: str | None = None,
     ) -> Outcome:
         """Run one tool request. Returns an Outcome or raises a PipelineError.
+
+        ``agent_note`` is the already sanitized, unverified text the agent attached. The
+        transport adapter pops it from the arguments first; it goes only to the approval
+        display and the audit row, never into validation, signature, hashing or execution.
 
         A plain string is an identity with the gateway defaults and engine.
         A repeat of the same ``(agent, idempotency_key)`` joins the original call
@@ -250,7 +256,7 @@ class Pipeline:
         """
         identity = agent if isinstance(agent, AgentIdentity) else AgentIdentity(id=agent)
         if idempotency_key is None:
-            return await self._run(identity, tool, args, on_pending)
+            return await self._run(identity, tool, args, on_pending, agent_note)
 
         key = (identity.id, idempotency_key)
         self._purge_keyed()
@@ -265,7 +271,7 @@ class Pipeline:
         if call is not None and (call.tool, call.args) != (tool, args):
             raise InvalidParams("idempotency_key was already used for a different request")
         if call is None:
-            call = _KeyedCall(tool, args)
+            call = _KeyedCall(tool, args, agent_note)
             await self._db.put_idempotency(*key, tool, _canonical(args))
             call.task = asyncio.create_task(self._run_keyed(identity, key, call))
             call.task.add_done_callback(lambda t, k=key, c=call: self._keyed_done(k, c, t))
@@ -300,7 +306,7 @@ class Pipeline:
             task.add_done_callback(self._bg.discard)
 
         try:
-            outcome = await self._run(identity, call.tool, call.args, on_pending)
+            outcome = await self._run(identity, call.tool, call.args, on_pending, call.note)
         except (PolicyDenied, ApprovalDenied, ApprovalTimeout) as e:
             await self._db.set_idempotency_result(*key, json.dumps(_payload(e)))
             raise
@@ -344,6 +350,7 @@ class Pipeline:
         tool: str,
         args: Any,
         on_pending: PendingCallback | None,
+        agent_note: str | None = None,
     ) -> Outcome:
         agent = identity.id
         engine = identity.engine or self._engine
@@ -388,6 +395,7 @@ class Pipeline:
                 signature=signature,
                 decision=decision.value,
                 agent_id=agent,
+                agent_note=agent_note,
                 **(
                     {
                         "resolution": f"remembered_{decision.value}",
@@ -411,7 +419,7 @@ class Pipeline:
         cap = identity.max_pending or self._max_pending
         if sum(1 for p in self._pending.values() if p.agent_id == agent) >= cap:
             raise RateLimited("Too many pending approvals", request_id=request.id)
-        return await self._ask(request, identity, on_pending, evaluation.approval)
+        return await self._ask(request, identity, on_pending, evaluation.approval, agent_note)
 
     def _audit_args(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         return self._registry.redact_args(tool, args) if self._registry else args
@@ -440,6 +448,7 @@ class Pipeline:
         identity: AgentIdentity,
         on_pending: PendingCallback | None = None,
         approval: ApprovalSpec | None = None,
+        agent_note: str | None = None,
     ) -> Outcome:
         request_id = request.id
         timeout = (
@@ -456,6 +465,7 @@ class Pipeline:
             args=self._audit_args(request.tool_name, request.args),
             risk=getattr(tool_def, "risk", None),
             expires_at=expires_at_epoch,
+            agent_note=agent_note,
             remember=(
                 self._remembered.offer(request.tool_name, request.signature, request.args, approval)
                 if self._remembered is not None
@@ -476,7 +486,7 @@ class Pipeline:
 
         try:
             result = await self._coordinator.request(
-                approval_req, on_pending=on_pending, **coordinator_args
+                approval_req, on_pending=on_pending, preview_args=request.args, **coordinator_args
             )
         except NoChannelError as e:
             logger.error("No approval channel accepted request %s", request_id)

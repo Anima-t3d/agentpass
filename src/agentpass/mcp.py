@@ -21,8 +21,9 @@ from aiohttp import web
 from agentpass.agents import AgentIdentity, AgentRegistry
 from agentpass.db import Database
 from agentpass.pipeline import Outcome, Pipeline, PipelineError
+from agentpass.preview import sanitize_note
 from agentpass.registry import ToolRegistry
-from agentpass.schema import input_schema, tool_annotations
+from agentpass.schema import input_schema, tool_annotations, with_gateway_properties
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,7 @@ class McpServer:
             tools.append(entry)
         # Optional on every tool call; kept out of the arg schema the pipeline validates
         for entry in tools:
-            entry["inputSchema"]["properties"]["idempotency_key"] = {"type": "string"}
+            with_gateway_properties(entry["inputSchema"], idempotency_key=True)
         return [*tools, *GATEWAY_TOOLS]
 
     # --- tools/call ---
@@ -250,6 +251,10 @@ class McpServer:
         key = args.pop("idempotency_key", None)
         if key is not None and (not isinstance(key, str) or not key):
             raise ToolError("invalid_params", "idempotency_key must be a non-empty string")
+        try:
+            note = sanitize_note(args.pop("agent_note", None))
+        except ValueError as e:
+            raise ToolError("invalid_params", str(e)) from None
 
         pending = asyncio.Event()
         info: dict[str, Any] = {}
@@ -258,7 +263,7 @@ class McpServer:
             info["request_id"], info["expires_at"] = request_id, expires_at
             pending.set()
 
-        task = asyncio.create_task(self._run_call(identity, name, args, key, on_pending))
+        task = asyncio.create_task(self._run_call(identity, name, args, key, on_pending, note))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         task.add_done_callback(self._reap)
@@ -288,6 +293,7 @@ class McpServer:
         args: dict,
         key: str | None,
         on_pending: Any,
+        note: str | None = None,
     ) -> Outcome | PipelineError:
         """Pipeline.process, plus: keep the final result of an approval in the database.
 
@@ -297,7 +303,9 @@ class McpServer:
         and left, and nobody would retrieve it.
         """
         try:
-            outcome = await self._pipeline.process(identity, name, args, key, on_pending=on_pending)
+            outcome = await self._pipeline.process(
+                identity, name, args, key, on_pending=on_pending, agent_note=note
+            )
         except PipelineError as e:
             if e.awaiting_delivery and e.request_id:
                 await self._pipeline.store_undelivered(e.request_id, e)
