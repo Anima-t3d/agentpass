@@ -34,6 +34,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
+from agentpass.approval.channel import Answer, AnswerStatus
 from agentpass.config import LOOPBACK_HOSTS, ConfigError
 from agentpass.models import AuditEntry
 from agentpass.passkey import assets
@@ -136,18 +137,7 @@ class PendingApproval:
         )
 
 
-@dataclass
-class PasskeyAnswer:
-    """Matches the DESIGN 4.1 `Answer` fields; replaced by the coordinator's class at wiring."""
-
-    approved: bool
-    channel: str
-    approver_id: str
-    proof: dict[str, Any] | None = None
-    scope: str | None = None
-
-
-AnswerFn = Callable[[str, Any], Awaitable[Any]]
+AnswerFn = Callable[[str, Answer], Awaitable[AnswerStatus]]
 
 
 def _json(data: Any, status: int = 200) -> web.Response:
@@ -393,13 +383,15 @@ class ApprovalPage:
         if self.pending.pop(pending.approval_id, None) is None:
             raise _http(409, "already resolved")
         try:
-            accepted = await self.answer(
-                pending.approval_id, PasskeyAnswer(approved, "passkey", approver, proof)
+            status = await self.answer(
+                pending.approval_id, Answer(approved, "passkey", approver, proof)
             )
         except Exception:
             self.pending.setdefault(pending.approval_id, pending)
             raise
-        if accepted is False:
+        if status is AnswerStatus.REJECTED:
+            raise _http(403, "answer rejected")
+        if status is not AnswerStatus.ACCEPTED:
             raise _http(409, "already resolved")
         return _json({"ok": True, "approved": approved})
 

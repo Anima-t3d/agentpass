@@ -6,6 +6,7 @@ the JSON endpoints are driven directly, with no network and no browser.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -21,6 +22,13 @@ from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from agentpass.approval import (
+    Answer,
+    AnswerStatus,
+    ApprovalCoordinator,
+    ApprovalReason,
+    ApprovalRequest,
+)
 from agentpass.config import ConfigError
 from agentpass.db import Database
 from agentpass.passkey.channel import PasskeyChannel, issue_enrolment_url
@@ -128,9 +136,9 @@ class Req:
 class Sink:
     def __init__(self) -> None:
         self.answers: list[tuple[str, object]] = []
-        self.result: bool | None = None
+        self.result = AnswerStatus.ACCEPTED
 
-    async def answer(self, approval_id: str, answer: object) -> bool | None:
+    async def answer(self, approval_id: str, answer: object) -> AnswerStatus:
         self.answers.append((approval_id, answer))
         return self.result
 
@@ -489,7 +497,7 @@ async def test_deny_needs_no_signature_but_needs_csrf(env):
 async def test_already_resolved_elsewhere(env):
     await env.enrol()
     await env.send("a1")
-    env.sink.result = False
+    env.sink.result = AnswerStatus.ALREADY_RESOLVED
     r = await env.approve("a1", env.auth.assert_(await env.challenge("a1")))
     assert r.status == 409
 
@@ -556,3 +564,96 @@ def test_cli_enroll_prints_url(tmp_path, capsys):
     assert exc.value.code == 0
     assert f"{ORIGIN}/enroll?token=" in capsys.readouterr().out
     assert (tmp_path / "data" / "passkey-enroll.json").exists()
+
+
+# --- through the real coordinator (no stub sink or answer class) ---
+
+
+@pytest.fixture
+async def live(tmp_path):
+    cfg = PasskeyConfig.from_mapping(
+        {"enabled": True, "rp_id": RP_ID, "origin": ORIGIN, "port": 0},
+        str(tmp_path / "agentpass.db"),
+    )
+    db = Database(str(tmp_path / "agentpass.db"))
+    await db.initialize()
+    channel = PasskeyChannel(cfg, db=db)
+    coordinator = ApprovalCoordinator(db, [channel])
+    await coordinator.start()
+    client = TestClient(TestServer(channel.page.build_app()))
+    await client.start_server()
+    r = await client.get("/api/session", headers={"Host": HOST})
+    e = Env(channel, client, None, db, Authenticator(), (await r.json())["csrf"])
+    yield e, coordinator
+    await client.close()
+    await coordinator.stop()
+    await db.close()
+
+
+def _live_request(approval_id="L1") -> ApprovalRequest:
+    return ApprovalRequest(
+        approval_id=approval_id,
+        agent_id="hermes",
+        tool="ha_fire_event",
+        signature="ha_fire_event",
+        args={"event": "x"},
+        expires_at=time.time() + 60,
+        require="passkey",
+    )
+
+
+async def _wait_pending(env, approval_id):
+    for _ in range(200):
+        if approval_id in env.channel.page.pending:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("request never reached the page")
+
+
+async def test_passkey_approve_resolves_the_real_coordinator(live):
+    env, coordinator = live
+    await env.enrol()
+    task = asyncio.create_task(coordinator.request(_live_request()))
+    await _wait_pending(env, "L1")
+    ch = await env.challenge("L1")
+    r = await env.approve("L1", env.auth.assert_(ch))
+    assert r.status == 200, await r.text()
+    outcome = await task
+    assert outcome.approved and outcome.reason is ApprovalReason.APPROVED
+    assert outcome.channel == "passkey" and outcome.proof["kind"] == "webauthn"
+    assert outcome.remembered is None
+
+
+async def test_passkey_deny_resolves_the_real_coordinator(live):
+    env, coordinator = live
+    task = asyncio.create_task(coordinator.request(_live_request()))
+    await _wait_pending(env, "L1")
+    r = await env.post("/api/approvals/L1/deny")
+    assert r.status == 200, await r.text()
+    outcome = await task
+    assert not outcome.approved and outcome.reason is ApprovalReason.DENIED
+    assert outcome.channel == "passkey"
+
+
+async def test_passkey_page_never_asks_to_remember(live):
+    env, coordinator = live
+    task = asyncio.create_task(coordinator.request(_live_request()))
+    await _wait_pending(env, "L1")
+    seen: list[Answer] = []
+    original = env.channel.page.answer
+
+    async def spy(approval_id, answer):
+        seen.append(answer)
+        return await original(approval_id, answer)
+
+    env.channel.page.answer = spy
+    assert (await env.post("/api/approvals/L1/deny")).status == 200
+    await task
+    assert type(seen[0]) is Answer and seen[0].remember is None
+
+
+async def test_page_reports_an_unknown_request_as_409(live):
+    env, _ = live
+    await env.send("ghost")  # shown on the page, but the coordinator has no such request
+    r = await env.post("/api/approvals/ghost/deny")
+    assert r.status == 409
