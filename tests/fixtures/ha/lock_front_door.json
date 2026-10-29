@@ -1,0 +1,6 @@
+{
+  "entity_id": "lock.front_door",
+  "state": "locked",
+  "attributes": {"friendly_name": "Front door", "device_class": "lock"},
+  "last_changed": "2026-10-29T08:12:44+00:00"
+}

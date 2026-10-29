@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from agentpass.config import PreviewSpec, PreviewWarning, ToolDefinition
 from agentpass.preview.model import LookupNote, Preview, Section, Unavailable
+from agentpass.preview.renderers import render_entity_state
 from agentpass.preview.sanitize import escape_unsafe
 from agentpass.services.http import HTTPServiceError
 
@@ -30,7 +31,7 @@ DEFAULT_TIMEOUT = 3.0  # whole build, seconds
 DEFAULT_MAX_BYTES = 64 * 1024  # serialized preview
 SUMMARY_LIMIT = 300
 LOOKUP_MAX_BYTES = 256 * 1024
-IMPLEMENTED_RENDERERS = frozenset({"template"})
+IMPLEMENTED_RENDERERS = frozenset({"template", "entity_state"})
 
 _REF_RE = re.compile(r"\{(\w+)((?:\.[\w-]+)*)\}")
 _MISSING = object()
@@ -109,6 +110,11 @@ def _warning_fires(w: PreviewWarning, ctx: _Context) -> bool:
     return not value.endswith(w.operand)  # endswith_not
 
 
+def _refs_present(lookup: Any, args: dict[str, Any]) -> bool:
+    templates = [lookup.path, *(lookup.query or {}).values()]
+    return all(args.get(ref) is not None for t in templates for ref in re.findall(r"\{(\w+)\}", t))
+
+
 def _failure_reason(exc: BaseException) -> str:
     """A short, content-free reason for a failed lookup."""
     if isinstance(exc, TimeoutError):
@@ -165,6 +171,13 @@ class PreviewService:
         notes, failure = await self._run_lookups(definition, spec, values)
         if failure is not None:
             return Unavailable(failure, _now())
+        if spec.renderer == "entity_state":
+            preview = render_entity_state(
+                definition, values, notes, max_chars=spec.max_chars, built_at=_now()
+            )
+            if spec.confirm_text:
+                preview.confirm_text = _Context(values, spec.max_chars).render(spec.confirm_text)
+            return self._fit(preview).seal()
         return self._render(definition, spec, values, notes)
 
     async def _run_lookups(
@@ -177,6 +190,10 @@ class PreviewService:
         if service is None:
             return [], "service not configured"
         args = dict(values)
+        # A lookup that needs an optional arg the agent left out is skipped, not failed
+        runnable = [lk for lk in spec.lookups if _refs_present(lk, args)]
+        if not runnable:
+            return [], None
 
         async def one(lk: Any) -> Any:
             return await asyncio.wait_for(
@@ -190,10 +207,10 @@ class PreviewService:
                 lk.timeout + 0.5,
             )
 
-        results = await asyncio.gather(*(one(lk) for lk in spec.lookups), return_exceptions=True)
+        results = await asyncio.gather(*(one(lk) for lk in runnable), return_exceptions=True)
         notes: list[LookupNote] = []
         failure: str | None = None
-        for lk, result in zip(spec.lookups, results, strict=True):
+        for lk, result in zip(runnable, results, strict=True):
             if isinstance(result, asyncio.CancelledError):
                 raise result
             if isinstance(result, BaseException):

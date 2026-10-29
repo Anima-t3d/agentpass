@@ -1,0 +1,5 @@
+{
+  "entity_id": "script.goodnight",
+  "state": "off",
+  "attributes": {"friendly_name": "Goodnight"}
+}

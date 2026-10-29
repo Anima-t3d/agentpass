@@ -114,6 +114,11 @@ tools:
         signature: false
         description: "RGB triple"
     risk: high
+    preview:
+      renderer: entity_state
+      lookups:
+        # skipped when the call names no entity; a failure only drops the current state
+        - { id: state, path: "/api/states/{entity_id}", on_error: omit }
     request:
       method: POST
       path: "/api/services/{domain}/{service}"
@@ -130,6 +135,8 @@ tools:
         required: true
         validate: "^[a-z][a-z0-9_.]*$"
     risk: high
+    preview:
+      renderer: entity_state
     request:
       method: POST
       path: "/api/events/{event_type}"

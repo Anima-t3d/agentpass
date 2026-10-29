@@ -1107,7 +1107,9 @@ def _preview_template(label: str, template: Any, roots: set[str]) -> str:
     return template
 
 
-def _parse_preview_lookup(where: str, i: int, raw: Any, args: dict, seen: list) -> PreviewLookup:
+def _parse_preview_lookup(
+    where: str, i: int, raw: Any, args: dict, seen: list, *, optional_args_ok: bool = False
+) -> PreviewLookup:
     lw = f"{where} lookup #{i + 1}"
     if not isinstance(raw, dict):
         raise ConfigError(f"{lw}: must be a mapping")
@@ -1132,7 +1134,7 @@ def _parse_preview_lookup(where: str, i: int, raw: Any, args: dict, seen: list) 
         raise ConfigError(f"{lw}: path must not contain a scheme or backslash")
     _check_template(f"{lw} path", path, args)
     for ref in _TEMPLATE_REF_RE.findall(path):
-        if not args[ref].required:
+        if not optional_args_ok and not args[ref].required:
             raise ConfigError(f"{lw}: path arg {ref!r} must be required")
     query = raw.get("query")
     if query is not None:
@@ -1205,7 +1207,11 @@ def _parse_preview(where: str, data: Any, args: dict[str, ArgDefinition]) -> Pre
         raise ConfigError(f"{where}: at most {PREVIEW_MAX_LOOKUPS} lookups")
     lookups: list[PreviewLookup] = []
     for i, raw in enumerate(lookups_raw):
-        lookups.append(_parse_preview_lookup(where, i, raw, args, lookups))
+        lookups.append(
+            _parse_preview_lookup(
+                where, i, raw, args, lookups, optional_args_ok=renderer != "template"
+            )
+        )
 
     roots = set(args) | {lk.id for lk in lookups}
     title = _preview_template(f"{where} title", data.get("title", ""), roots)
