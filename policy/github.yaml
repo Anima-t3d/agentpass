@@ -3,7 +3,24 @@
 #
 # Reads allow, writes ask, destructive or security-sensitive actions deny.
 # Deny rules win over everything an agent file says.
+#
+# Writes to main or master are denied as a *default*, so an agent file can open one
+# repository up with an explicit rule (rules beat defaults), e.g.
+#   rules: [{pattern: "gh_put_contents(me/notes, main)", action: ask}]
+# The approval preview also warns "Writes directly to the default branch".
 defaults:
+  - pattern: "gh_put_contents(*, main)"
+    action: deny
+    description: "Writes to main need an explicit rule for that repository"
+  - pattern: "gh_put_contents(*, master)"
+    action: deny
+    description: "Writes to master need an explicit rule for that repository"
+  - pattern: "gh_create_branch(*, main)"
+    action: deny
+    description: "Creating a branch called main needs an explicit rule"
+  - pattern: "gh_create_branch(*, master)"
+    action: deny
+    description: "Creating a branch called master needs an explicit rule"
   - pattern: "gh_get_*"
     action: allow
   - pattern: "gh_list_*"

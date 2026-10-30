@@ -65,8 +65,29 @@ tools:
         required: true
       end:
         required: true
+      attendees:
+        signature: false
+        description: "Invitees as Calendar API objects, e.g. [{email: ...}]"
+      location: { type: string, max_length: 500, signature: false }
+      description: { type: text, max_length: 8000, signature: false }
+    preview:
+      max_chars: 8000
+      lookups:
+        - { id: calendar, path: "/calendar/v3/calendars/{calendar_id}", on_error: omit }
+      title: "Create event {summary}"
+      summary: "Create event {summary} on {calendar.summary}"
+      fields:
+        - { label: "Calendar", value: "{calendar.summary} ({calendar_id})" }
+        - { label: "Event", value: "{summary}" }
+        - { label: "Starts", value: "{start}" }
+        - { label: "Ends", value: "{end}" }
+        - { label: "Attendees", value: "{attendees}" }
+        - { label: "Invitations", value: "sendUpdates is pinned to all: Google emails an invitation to every attendee listed" }
+        - { label: "Location", value: "{location}" }
+        - { label: "Description", value: "{description}" }
     risk: medium
     request:
       method: POST
       path: "/calendar/v3/calendars/{calendar_id}/events"
+      query: { sendUpdates: "all" }
       body_exclude: [calendar_id]

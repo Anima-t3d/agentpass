@@ -12,6 +12,7 @@ tools:
       query:
         required: true
         validate: "[A-Za-z0-9 _:=.'\\-]{0,200}"
+    risk: low
     request:
       method: GET
       path: "/drive/v3/files?pageSize=25&q={query}"
@@ -23,6 +24,7 @@ tools:
       file_id:
         required: true
         validate: "[A-Za-z0-9_\\-]{10,100}"
+    risk: low
     request:
       method: GET
       path: "/drive/v3/files/{file_id}?fields=id,name,mimeType,modifiedTime,size,parents"
@@ -37,6 +39,7 @@ tools:
       mimeType:
         required: true
         validate: "application/vnd\\.google-apps\\.folder"
+    risk: medium
     request:
       method: POST
       path: "/drive/v3/files"

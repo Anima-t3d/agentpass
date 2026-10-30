@@ -21,6 +21,10 @@ x-common:
     description: "Repository name"
   number: &number
     { type: integer, required: true, min: 1, description: "Issue or pull request number" }
+  branch: &branch
+    { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+", description: "Branch name" }
+  sha: &sha
+    { type: string, validate: "[0-9a-f]{40}|[0-9a-f]{64}", signature: false }
   per_page: &per_page
     { type: integer, min: 1, max: 100, default: 30, signature: false }
   page: &page
@@ -52,6 +56,33 @@ tools:
     request:
       method: GET
       path: "/repos/{owner}/{repo}"
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  gh_get_branch:
+    description: "Get a branch (its head commit)"
+    signature: "{owner}/{repo}, {branch}"
+    args: { owner: *owner, repo: *repo, branch: *branch }
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/branches/{branch:path}"
+      headers: *headers
+    response: { max_bytes: 1048576 }
+    risk: low
+
+  gh_get_contents:
+    description: "Get a file (base64 content and blob sha) or list a directory"
+    signature: "{owner}/{repo}"
+    args:
+      owner: *owner
+      repo: *repo
+      path: { type: string, required: true, max_length: 1024, validate: "[^\\x00-\\x1f\\\\]+", signature: false, description: "Path inside the repository" }
+      ref: { type: string, max_length: 255, validate: "[A-Za-z0-9._/-]+", signature: false, description: "Branch, tag or commit; default branch if omitted" }
+    request:
+      method: GET
+      path: "/repos/{owner}/{repo}/contents/{path:path}"
+      query: { ref: "{ref}" }
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
@@ -176,6 +207,15 @@ tools:
         items: { type: string, max_length: 50 }
         max_items: 10
         signature: false
+    preview:
+      max_chars: 20000
+      title: "Create issue in {owner}/{repo}: {title}"
+      summary: "Create issue in {owner}/{repo}: {title}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Title", value: "{title}" }
+        - { label: "Labels", value: "{labels}" }
+        - { label: "Body", value: "{body}" }
     request:
       method: POST
       path: "/repos/{owner}/{repo}/issues"
@@ -193,6 +233,16 @@ tools:
       repo: *repo
       number: *number
       body: { type: text, required: true, max_length: 65536 }
+    preview:
+      max_chars: 20000
+      lookups:
+        - { id: issue, path: "/repos/{owner}/{repo}/issues/{number}", on_error: omit }
+      title: "Comment on #{number} in {owner}/{repo}"
+      summary: "Comment on #{number} {issue.title} in {owner}/{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "On", value: "#{number} {issue.title} ({issue.state})" }
+        - { label: "Comment", value: "{body}" }
     request:
       method: POST
       path: "/repos/{owner}/{repo}/issues/{number}/comments"
@@ -213,11 +263,157 @@ tools:
       base: { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+", signature: false }
       body: { type: text, max_length: 65536 }
       draft: { type: boolean, signature: false }
+    preview:
+      max_chars: 20000
+      lookups:
+        - { id: compare, path: "/repos/{owner}/{repo}/compare/{base:path}...{head:path}", on_error: omit }
+      title: "Open pull request in {owner}/{repo}: {title}"
+      summary: "Open pull request {head} into {base} in {owner}/{repo}: {title}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Title", value: "{title}" }
+        - { label: "Branches", value: "{head} into {base}" }
+        - { label: "Draft", value: "{draft}" }
+        - { label: "Commits ahead", value: "{compare.ahead_by}" }
+        - { label: "Changed files", value: "{compare.files.0.filename} and others (first listed)" }
+        - { label: "Body", value: "{body}" }
+      warnings:
+        - { when: { value: "{compare.ahead_by}", equals: "0" }, text: "The head branch has no commits ahead of the base" }
     request:
       method: POST
       path: "/repos/{owner}/{repo}/pulls"
       headers: *headers
       body: { include: [title, head, base, body, draft] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [body], store_result: truncated }
+    risk: medium
+
+  gh_create_branch:
+    description: "Create a branch pointing at an existing commit sha"
+    signature: "{owner}/{repo}, {branch}"
+    args:
+      owner: *owner
+      repo: *repo
+      branch: *branch
+      sha:
+        { type: string, required: true, validate: "[0-9a-f]{40}|[0-9a-f]{64}", signature: false, description: "Commit sha the new branch points at" }
+    preview:
+      lookups:
+        - { id: base, path: "/repos/{owner}/{repo}/git/commits/{sha}", on_error: omit }
+      title: "Create branch {branch} in {owner}/{repo}"
+      summary: "Create branch {branch} in {owner}/{repo} from {sha}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "New branch", value: "{branch}" }
+        - { label: "From commit", value: "{sha}" }
+        - { label: "Commit message", value: "{base.message}" }
+    request:
+      method: POST
+      path: "/repos/{owner}/{repo}/git/refs"
+      headers: *headers
+      body: { include: [sha], map: { ref: "refs/heads/{branch}" } }
+    response: { max_bytes: 1048576 }
+    risk: medium
+
+  gh_put_contents:
+    description: >-
+      Create or update one file on a branch with a commit. content is the base64 of the whole new
+      file. To update an existing file pass sha, the blob sha from gh_get_contents; GitHub rejects
+      the write if the file has changed since.
+    signature: "{owner}/{repo}, {branch}"
+    args:
+      owner: *owner
+      repo: *repo
+      branch: *branch
+      path: { type: string, required: true, max_length: 1024, validate: "[^\\x00-\\x1f\\\\]+", signature: false, description: "Path inside the repository" }
+      message: { type: text, required: true, max_length: 4096, signature: false, description: "Commit message" }
+      content:
+        { type: text, required: true, max_length: 1400000, validate: "[A-Za-z0-9+/=\\r\\n]*", signature: false, description: "Base64 of the new file content" }
+      sha: *sha
+    preview:
+      renderer: diff
+      lookups:
+        - { id: contents, path: "/repos/{owner}/{repo}/contents/{path:path}", query: { ref: "{branch}" }, on_error: omit, timeout: 3 }
+        - { id: repo_info, path: "/repos/{owner}/{repo}", on_error: omit }
+    request:
+      method: PUT
+      path: "/repos/{owner}/{repo}/contents/{path:path}"
+      headers: *headers
+      body: { include: [branch, message, content, sha] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [content], store_result: truncated }
+    risk: medium
+
+  gh_update_issue:
+    description: "Change an issue: title, body, state or labels"
+    signature: "{owner}/{repo}, {number}"
+    args:
+      owner: *owner
+      repo: *repo
+      number: *number
+      title: { type: string, max_length: 256, signature: false }
+      body: { type: text, max_length: 65536 }
+      state: { type: enum, values: [open, closed], signature: false }
+      labels:
+        type: array
+        items: { type: string, max_length: 50 }
+        max_items: 10
+        signature: false
+    preview:
+      max_chars: 20000
+      lookups:
+        - { id: current, path: "/repos/{owner}/{repo}/issues/{number}", on_error: omit }
+      title: "Update issue #{number} in {owner}/{repo}"
+      summary: "Update issue #{number} {current.title} in {owner}/{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Issue now", value: "#{number} {current.title} ({current.state})" }
+        - { label: "New title", value: "{title}" }
+        - { label: "New state", value: "{state}" }
+        - { label: "Labels now", value: "{current.labels}" }
+        - { label: "New labels (replace all)", value: "{labels}" }
+        - { label: "Body now", value: "{current.body}" }
+        - { label: "New body", value: "{body}" }
+    request:
+      method: PATCH
+      path: "/repos/{owner}/{repo}/issues/{number}"
+      headers: *headers
+      body: { include: [title, body, state, labels] }
+    response: { max_bytes: 1048576 }
+    audit: { redact_args: [body], store_result: truncated }
+    risk: medium
+
+  gh_update_pull:
+    description: "Change a pull request: title, body, state or base branch"
+    signature: "{owner}/{repo}, {number}"
+    args:
+      owner: *owner
+      repo: *repo
+      number: *number
+      title: { type: string, max_length: 256, signature: false }
+      body: { type: text, max_length: 65536 }
+      state: { type: enum, values: [open, closed], signature: false }
+      base: { type: string, max_length: 255, validate: "[A-Za-z0-9._/-]+", signature: false }
+    preview:
+      max_chars: 20000
+      lookups:
+        - { id: current, path: "/repos/{owner}/{repo}/pulls/{number}", on_error: omit }
+      title: "Update pull request #{number} in {owner}/{repo}"
+      summary: "Update pull request #{number} {current.title} in {owner}/{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Pull request now", value: "#{number} {current.title} ({current.state})" }
+        - { label: "Branches now", value: "{current.head.ref} into {current.base.ref}" }
+        - { label: "New title", value: "{title}" }
+        - { label: "New state", value: "{state}" }
+        - { label: "New base branch", value: "{base}" }
+        - { label: "Body now", value: "{current.body}" }
+        - { label: "New body", value: "{body}" }
+    request:
+      method: PATCH
+      path: "/repos/{owner}/{repo}/pulls/{number}"
+      headers: *headers
+      body: { include: [title, body, state, base] }
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium
@@ -251,6 +447,13 @@ tools:
     description: "Delete a repository"
     signature: "{owner}/{repo}"
     args: { owner: *owner, repo: *repo }
+    preview:
+      renderer: resource_summary
+      lookups:
+        - { id: repo_info, path: "/repos/{owner}/{repo}", on_error: omit }
+        - { id: prs, path: "/search/issues", query: { q: "repo:{owner}/{repo} type:pr state:open", per_page: "1" }, on_error: omit }
+      confirm_text: "{repo}"
+      require_page: true
     request:
       method: DELETE
       path: "/repos/{owner}/{repo}"
@@ -269,6 +472,17 @@ tools:
       required_status_checks: { type: object, signature: false }
       required_pull_request_reviews: { type: object, signature: false }
       restrictions: { type: object, signature: false }
+    preview:
+      title: "Change branch protection of {branch} in {owner}/{repo}"
+      summary: "Change branch protection of {branch} in {owner}/{repo}"
+      confirm_text: "{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Branch", value: "{branch}" }
+        - { label: "Enforce for admins", value: "{enforce_admins}" }
+        - { label: "Required status checks", value: "{required_status_checks}" }
+        - { label: "Required reviews", value: "{required_pull_request_reviews}" }
+        - { label: "Push restrictions", value: "{restrictions}" }
     request:
       method: PUT
       path: "/repos/{owner}/{repo}/branches/{branch:path}/protection"
@@ -286,6 +500,14 @@ tools:
       repo: *repo
       username: { type: string, required: true, max_length: 39, validate: "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?" }
       permission: { type: enum, values: [pull, triage, push, maintain, admin], default: push, signature: false }
+    preview:
+      title: "Give {username} {permission} access to {owner}/{repo}"
+      summary: "Give {username} {permission} access to {owner}/{repo}"
+      confirm_text: "{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "User", value: "{username}" }
+        - { label: "Permission", value: "{permission}" }
     request:
       method: PUT
       path: "/repos/{owner}/{repo}/collaborators/{username}"
@@ -303,6 +525,15 @@ tools:
       title: { type: string, max_length: 100, signature: false }
       key: { type: text, required: true, max_length: 8192 }
       read_only: { type: boolean, signature: false }
+    preview:
+      title: "Add a deploy key to {owner}/{repo}"
+      summary: "Add deploy key {title} to {owner}/{repo} (read only: {read_only})"
+      confirm_text: "{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Title", value: "{title}" }
+        - { label: "Read only", value: "{read_only}" }
+        - { label: "Public key", value: "{key}" }
     request:
       method: POST
       path: "/repos/{owner}/{repo}/keys"
@@ -319,6 +550,13 @@ tools:
       owner: *owner
       repo: *repo
       key_id: { type: integer, required: true, min: 1 }
+    preview:
+      title: "Remove deploy key {key_id} from {owner}/{repo}"
+      summary: "Remove deploy key {key_id} from {owner}/{repo}"
+      confirm_text: "{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Key id", value: "{key_id}" }
     request:
       method: DELETE
       path: "/repos/{owner}/{repo}/keys/{key_id}"
@@ -335,6 +573,14 @@ tools:
       secret_name: { type: string, required: true, max_length: 100, validate: "[A-Z_][A-Z0-9_]*" }
       encrypted_value: { type: text, required: true, max_length: 65536 }
       key_id: { type: string, required: true, max_length: 64, validate: "[0-9]+", signature: false }
+    preview:
+      title: "Set Actions secret {secret_name} in {owner}/{repo}"
+      summary: "Set Actions secret {secret_name} in {owner}/{repo}"
+      confirm_text: "{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Secret name", value: "{secret_name}" }
+        - { label: "Value", value: "(encrypted, not shown)" }
     request:
       method: PUT
       path: "/repos/{owner}/{repo}/actions/secrets/{secret_name}"

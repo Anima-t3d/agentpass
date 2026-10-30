@@ -46,6 +46,12 @@ tools:
         required: true
         validate: "[A-Za-z0-9_\\-=]{1,100000}"
     risk: high
+    audit: { redact_args: [raw] }
+    preview:
+      renderer: email
+      require_page: true   # the page shows the whole message; Telegram only links to it
+      # internal_domains: [example.com]   # warn about recipients outside these domains
+      # telegram: minimal                 # summary without the subject text
     request:
       method: POST
       path: "/gmail/v1/users/me/messages/send"

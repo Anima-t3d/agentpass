@@ -722,12 +722,21 @@ GH_CASES = {
         ("gh_get_pull", {**REPO, "number": 2}),
         ("gh_list_workflow_runs", REPO),
         ("gh_get_workflow_run", {**REPO, "run_id": 9}),
+        ("gh_get_branch", {**REPO, "branch": "main"}),
+        ("gh_get_contents", {**REPO, "path": "docs/a.md"}),
     ],
     "ask": [
         ("gh_create_issue", {**REPO, "title": "t"}),
         ("gh_create_issue_comment", {**REPO, "number": 1, "body": "hi (there), *x*"}),
         ("gh_create_pull", {**REPO, "title": "t", "head": "feat/x", "base": "main"}),
         ("gh_dispatch_workflow", {**REPO, "workflow": "ci.yml", "ref": "main"}),
+        ("gh_create_branch", {**REPO, "branch": "feat/x", "sha": "a" * 40}),
+        (
+            "gh_put_contents",
+            {**REPO, "branch": "feat/x", "path": "a.md", "message": "m", "content": "eA=="},
+        ),
+        ("gh_update_issue", {**REPO, "number": 1, "state": "closed"}),
+        ("gh_update_pull", {**REPO, "number": 2, "title": "t"}),
     ],
     "deny": [
         ("gh_delete_repo", REPO),
@@ -794,7 +803,9 @@ def test_github_args_rejected(gh_registry, tool, args):
 def test_no_generic_github_tool(gh_registry):
     for tool in gh_registry[0].all_tools():
         assert "/repos/{owner}/{repo}" in tool.request.path or tool.request.path == "/user/repos"
-        assert not any(a in ("path", "url", "endpoint", "method") for a in tool.args)
+        assert not any(a in ("url", "endpoint", "method") for a in tool.args)
+        if "path" in tool.args:  # only a file path inside the repo, under /contents/
+            assert tool.request.path.endswith("/contents/{path:path}")
 
 
 async def test_github_request_shape(gh_registry):
