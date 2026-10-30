@@ -1,0 +1,5 @@
+{"full_name": "example-org/old-fork", "private": true, "visibility": "private", "archived": true,
+ "fork": true, "parent": {"full_name": "upstream/old"}, "default_branch": "master",
+ "pushed_at": "2023-01-05T08:00:00Z", "created_at": "2022-12-01T09:30:00Z",
+ "stargazers_count": 0, "forks_count": 0, "open_issues_count": 0, "size": 12,
+ "has_pages": false, "has_wiki": false}

@@ -296,7 +296,10 @@ class TestPreviewService:
         p = await service.build("ha_call_service", {"entity_id": "lock.front"})
         assert isinstance(p, Unavailable) and "not supported" in p.reason
 
-    async def test_builtin_renderer_not_yet_available(self, tmp_path):
+    async def test_builtin_renderer_not_yet_available(self, tmp_path, monkeypatch):
+        import agentpass.preview.service as service_module
+
+        monkeypatch.setattr(service_module, "IMPLEMENTED_RENDERERS", frozenset({"template"}))
         block = "      renderer: email\n"
         service, _ = _service(tmp_path, block)
         p = await service.build("ha_call_service", {"entity_id": "lock.front"})

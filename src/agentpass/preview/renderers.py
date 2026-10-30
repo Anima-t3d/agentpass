@@ -8,6 +8,7 @@ length cap before it lands in a section.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from agentpass.config import ToolDefinition
@@ -172,5 +173,111 @@ def _render_event(
             Section("text", "Event data", _text(body, max_chars)),
         ],
         warnings=["May trigger automations listening for this event; what they do is not shown"],
+        lookups=notes,
+    )
+
+
+def _age_days(raw: Any, built_at: str) -> float | None:
+    try:
+        then = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        now = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if then.tzinfo is None or now.tzinfo is None:
+        return None
+    return (now - then).total_seconds() / 86400
+
+
+def render_resource_summary(
+    values: dict[str, Any],
+    notes: list[LookupNote],
+    *,
+    max_chars: int,
+    built_at: str,
+    times: TimeFormatter | None = None,
+) -> Preview:
+    """``gh_delete_repo``: what deleting a repository removes (section 4.4).
+
+    Lookups: ``repo`` (``GET /repos/{owner}/{repo}``) and ``prs`` (an issue search for open
+    pull requests, read from ``total_count``). Either may be missing; the preview then says
+    what it could not look up instead of guessing.
+    """
+    owner, name = _text(values.get("owner", ""), 100), _text(values.get("repo", ""), 100)
+    full = f"{owner}/{name}"
+    repo = values.get("repo_info") if isinstance(values.get("repo_info"), dict) else None
+    prs = values.get("prs") if isinstance(values.get("prs"), dict) else None
+    repo_note = _lookup_note(notes, "repo_info")
+    warnings: list[str] = []
+
+    effect = (
+        f"PERMANENTLY DELETES {full}. Code, issues, pull requests, wiki, releases and stars "
+        "are removed. Forks are not deleted. This cannot be undone through the gateway."
+    )
+    sections = [Section("text", "Effect", effect)]
+    facts: list[list[str]] = []
+    summary = f"PERMANENTLY DELETE {full}"
+    if repo is None:
+        if repo_note is not None and repo_note.detail == "HTTP 404":
+            warnings.append("Repository not found: GitHub will reject this, or the name is wrong")
+        else:
+            reason = _text(repo_note.detail, 80) if repo_note is not None else "no lookup"
+            warnings.append(f"Repository details unavailable ({reason}); only the name is shown")
+    else:
+        visibility = repo.get("visibility") or ("private" if repo.get("private") else "public")
+        stars = repo.get("stargazers_count")
+        pushed = repo.get("pushed_at")
+        age = _age_days(pushed, built_at)
+        facts.append(["Repository", _text(repo.get("full_name") or full, max_chars)])
+        facts.append(["Visibility", _text(visibility, 40)])
+        facts.append(["Archived", "yes" if repo.get("archived") else "no"])
+        parent = repo.get("parent")
+        facts.append(
+            [
+                "Fork",
+                f"yes, of {_text(parent.get('full_name', '?'), 100)}"
+                if repo.get("fork") and isinstance(parent, dict)
+                else ("yes" if repo.get("fork") else "no"),
+            ]
+        )
+        facts.append(["Default branch", _text(repo.get("default_branch", "?"), 100)])
+        for label, key in (("Last push", "pushed_at"), ("Created", "created_at")):
+            if repo.get(key):
+                raw = str(repo[key])
+                shown = times.format(raw) if times is not None else None
+                facts.append([label, _text(shown or raw, max_chars)])
+        for label, key in (("Stars", "stargazers_count"), ("Forks", "forks_count")):
+            if repo.get(key) is not None:
+                facts.append([label, _text(repo[key], 20)])
+        if repo.get("open_issues_count") is not None:
+            facts.append(["Open issues and PRs", _text(repo["open_issues_count"], 20)])
+        if prs is not None and isinstance(prs.get("total_count"), int):
+            facts.append(["Open pull requests", str(prs["total_count"])])
+        if repo.get("size") is not None:
+            facts.append(["Size", f"{_text(repo['size'], 20)} KiB"])
+        facts.append(["GitHub Pages", "yes" if repo.get("has_pages") else "no"])
+        facts.append(["Wiki", "yes" if repo.get("has_wiki") else "no"])
+
+        if visibility == "public" and isinstance(stars, int) and stars >= 10:
+            warnings.append(f"Public repository with {stars} stars")
+        if age is not None and age <= 30:
+            warnings.append("Pushed to within the last 30 days")
+        if not repo.get("archived"):
+            warnings.append("Not archived")
+        if prs is not None and isinstance(prs.get("total_count"), int) and prs["total_count"] > 0:
+            warnings.append(f"{prs['total_count']} open pull request(s) will be lost")
+        bits = [_text(visibility, 40)]
+        if isinstance(stars, int):
+            bits.append(f"{stars} stars")
+        if age is not None:
+            bits.append(f"last push {int(age)} days ago" if age >= 1 else "pushed today")
+        summary += f" ({', '.join(bits)})"
+    if facts:
+        sections.append(Section("kv", "Repository", facts))
+    return Preview(
+        title=_cap(f"Delete repository {full}"),
+        summary=_cap(summary),
+        built_at=built_at,
+        sections=sections,
+        warnings=warnings,
         lookups=notes,
     )

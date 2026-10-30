@@ -245,6 +245,12 @@ class ResponseDefinition:
 
 RESERVED_ARG_NAMES = ("agent_note", "idempotency_key")  # gateway-added properties on every tool
 PREVIEW_RENDERERS = ("template", "email", "diff", "entity_state", "resource_summary")
+# Parameters a built-in renderer accepts next to the common keys, and the kind of value
+PREVIEW_RENDERER_PARAMS: dict[str, dict[str, str]] = {
+    "entity_state": {"entity": "str"},
+    "email": {"internal_domains": "domains", "telegram": "telegram"},
+    "diff": {"max_bytes": "int", "max_lines": "int", "max_diff_chars": "int"},
+}
 PREVIEW_ON_ERROR = ("unavailable", "omit")
 PREVIEW_COMPARISONS = ("equals", "in", "not_in", "endswith_not")
 PREVIEW_MAX_LOOKUPS = 5
@@ -1198,6 +1204,25 @@ def _parse_preview_warning(ww: str, raw: Any, roots: set[str]) -> PreviewWarning
     return PreviewWarning(text, _preview_template(f"{ww} value", when["value"], roots), op, operand)
 
 
+def _check_renderer_params(where: str, renderer: str, params: dict[str, Any]) -> None:
+    allowed = PREVIEW_RENDERER_PARAMS.get(renderer, {})
+    for key, value in params.items():
+        kind = allowed.get(key)
+        if kind is None:
+            known = ", ".join(sorted(allowed)) or "none"
+            raise ConfigError(f"{where}: renderer {renderer!r} has no parameter {key!r} ({known})")
+        if kind == "domains":
+            ok = isinstance(value, list) and all(isinstance(v, str) and v for v in value)
+        elif kind == "str":
+            ok = isinstance(value, str)
+        elif kind == "telegram":
+            ok = value in ("summary", "minimal")
+        else:  # positive int
+            ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        if not ok:
+            raise ConfigError(f"{where}: parameter {key!r} of renderer {renderer!r} is invalid")
+
+
 def _parse_preview(where: str, data: Any, args: dict[str, ArgDefinition]) -> PreviewSpec:
     where = f"{where} preview"
     if not isinstance(data, dict):
@@ -1209,6 +1234,7 @@ def _parse_preview(where: str, data: Any, args: dict[str, ArgDefinition]) -> Pre
     if renderer == "template" and unknown:
         raise ConfigError(f"{where}: unknown key(s): {', '.join(sorted(map(str, unknown)))}")
     params = {k: data[k] for k in unknown}  # built-in renderers take their own parameters
+    _check_renderer_params(where, renderer, params)
 
     max_chars = data.get("max_chars", PREVIEW_DEFAULT_MAX_CHARS)
     if (

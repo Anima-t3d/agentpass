@@ -336,11 +336,33 @@ def test_reserved_arg_name_is_a_config_error(tmp_path):
     assert any("reserved" in f.message for f in report.errors)
 
 
-def test_unimplemented_renderer_warns(tmp_path):
+def test_unimplemented_renderer_warns(tmp_path, monkeypatch):
+    # Every built-in renderer ships now; simulate one that is declared but missing
+    import agentpass.preview.service as service
+
+    monkeypatch.setattr(service, "IMPLEMENTED_RENDERERS", frozenset({"template"}))
     report = _preview_config(tmp_path, PREVIEW_TOOL % "renderer: email")
     assert not report.errors
     assert [f.code for f in report.warnings] == ["preview-renderer-unavailable"]
     assert report.exit_code(strict=True) == 1
+
+
+def test_high_risk_tool_without_preview_warns(tmp_path):
+    tool = "tools:\n  t:\n    risk: high\n    request: {method: GET, path: /x}\n"
+    report = _preview_config(tmp_path, tool)
+    assert [f.code for f in report.warnings] == ["preview-missing"]
+    assert report.exit_code() == 2 and report.exit_code(strict=True) == 1
+    ok = tool + "    preview:\n      fields: [{label: a, value: b}]\n"
+    assert _preview_config(tmp_path, ok).warnings == []
+
+
+def test_unknown_renderer_parameter_is_a_config_error(tmp_path):
+    report = _preview_config(tmp_path, PREVIEW_TOOL % "renderer: email\n      bogus: 1")
+    assert any("no parameter 'bogus'" in f.message for f in report.errors)
+    report = _preview_config(
+        tmp_path, PREVIEW_TOOL % "renderer: email\n      internal_domains: example.com"
+    )
+    assert any("invalid" in f.message for f in report.errors)
 
 
 def test_clean_preview_block_passes(tmp_path):

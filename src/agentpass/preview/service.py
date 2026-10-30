@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from agentpass.config import PreviewSpec, PreviewWarning, ToolDefinition
+from agentpass.preview.diff_render import render_diff
+from agentpass.preview.email_render import render_email
 from agentpass.preview.model import LookupNote, Preview, Section, Unavailable
-from agentpass.preview.renderers import render_entity_state
+from agentpass.preview.renderers import render_entity_state, render_resource_summary
 from agentpass.preview.sanitize import escape_unsafe
 from agentpass.preview.timefmt import TimeFormatter
 from agentpass.services.http import HTTPServiceError
@@ -33,7 +35,7 @@ DEFAULT_TIMEOUT = 3.0  # whole build, seconds
 DEFAULT_MAX_BYTES = 64 * 1024  # serialized preview
 SUMMARY_LIMIT = 300
 LOOKUP_MAX_BYTES = 256 * 1024
-IMPLEMENTED_RENDERERS = frozenset({"template", "entity_state"})
+IMPLEMENTED_RENDERERS = frozenset({"template", "entity_state", "email", "diff", "resource_summary"})
 
 _REF_RE = re.compile(r"\{(\w+)((?:\.[\w-]+)*)\}")
 _MISSING = object()
@@ -196,19 +198,37 @@ class PreviewService:
         if failure is not None:
             return Unavailable(failure, _now())
         times = TimeFormatter(self._zone)
-        if spec.renderer == "entity_state":
-            preview = render_entity_state(
-                definition, values, notes, max_chars=spec.max_chars, built_at=_now(), times=times
-            )
-            for note in notes:
-                if note.id == "state":
-                    note.raw_times = [f"last_changed: {raw}" for _, raw in times.seen]
+        if spec.renderer != "template":
+            preview = self._builtin(definition, spec, values, notes, times)
+            if isinstance(preview, Unavailable):
+                return preview
+            first_ok = next((n for n in notes if n.status == "ok"), None)
+            if first_ok is not None and times.seen:
+                label = "last_changed" if spec.renderer == "entity_state" else "time"
+                first_ok.raw_times = [f"{label}: {raw}" for _, raw in times.seen]
             if spec.confirm_text:
                 preview.confirm_text = _Context(values, spec.max_chars).render(
                     spec.confirm_text, display=False
                 )
             return self._fit(preview).seal()
         return self._render(definition, spec, values, notes, times)
+
+    def _builtin(
+        self,
+        definition: ToolDefinition,
+        spec: PreviewSpec,
+        values: dict[str, Any],
+        notes: list[LookupNote],
+        times: TimeFormatter,
+    ) -> Preview | Unavailable:
+        kw: dict[str, Any] = {"max_chars": spec.max_chars, "built_at": _now()}
+        if spec.renderer == "entity_state":
+            return render_entity_state(definition, values, notes, times=times, **kw)
+        if spec.renderer == "resource_summary":
+            return render_resource_summary(values, notes, times=times, **kw)
+        if spec.renderer == "email":
+            return render_email(values, notes, params=spec.params, **kw)
+        return render_diff(values, notes, params=spec.params, **kw)
 
     async def _run_lookups(
         self, definition: ToolDefinition, spec: PreviewSpec, values: dict[str, Any]

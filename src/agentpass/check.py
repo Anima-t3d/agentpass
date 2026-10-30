@@ -429,6 +429,12 @@ def _lint_previews(config: Config, registry: ToolRegistry, report: Report) -> No
         where = f"tool {tool.name!r}"
         spec = tool.preview
         if spec is None:
+            if tool.risk == "high":
+                report.warn(
+                    "preview-missing",
+                    where,
+                    "risk: high tool has no preview, so the approver sees only the raw arguments",
+                )
             continue
         service = config.services.get(tool.service_name)
         if spec.lookups and service is not None and service.handler != "http":
