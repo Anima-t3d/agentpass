@@ -69,7 +69,8 @@ AGENT_NOTE_PROPERTY: dict[str, Any] = {
     "maxLength": 500,
     "description": (
         "Optional: explain to the human approver why you need this call. "
-        "Shown to them as unverified agent text."
+        "Shown to them as unverified agent text. Fill it in for calls that may need a "
+        "passkey approval, so the approver knows what to expect."
     ),
 }
 

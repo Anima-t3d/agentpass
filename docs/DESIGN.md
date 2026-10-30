@@ -144,6 +144,18 @@ A rule can say how strong the approval must be (section 5.3):
 
 `require` is `any_trusted` (default), `telegram` or `passkey`. The coordinator only counts answers from channels satisfying it.
 
+### 3.7 Approval previews
+
+The approver sees what a call will do, not only the tool name and JSON. The full design is in [APPROVAL-PREVIEWS.md](APPROVAL-PREVIEWS.md); the rules that matter for the trust model:
+
+- The trusted part of a preview is built by the gateway from the validated args and from read-only `GET` lookups it makes itself with the tool's own service credentials. Agent text is never rendered there. The optional `agent_note` appears in a separate box labelled "Unverified text from the agent", is stripped at the transport adapter, is not part of the challenge, and is stored in the audit.
+- A preview failure shows "Preview unavailable (reason)" next to the raw args. It never blocks and never approves.
+- The proof is unchanged: tool and canonical args (and expiry). Lookups are a snapshot. `gh_put_contents` carries the base blob `sha` as a signed arg, so GitHub rejects a write onto a file that changed after the preview.
+- Renderers emit plain strings and structured section kinds only; the page has the one escaping point and a strict CSP. Mail is converted to text and never rendered as HTML; attachments are listed, never opened.
+- Previews go to trusted channels only (the page in full, Telegram a short summary). The stored preview is deleted when the request resolves. The audit keeps the digest, title, status and agent note, shown in the dashboard, and no bodies or diffs.
+
+Built-in renderers: `template` (declarative fields), `entity_state` (Home Assistant), `resource_summary` (repository delete, with typed confirmation of the repo name), `email` (`gmail_send_message`), `diff` (`gh_put_contents`: new file or change, binary and oversized files shown as sizes and hashes, 400 line cap, stale base sha warning).
+
 ## 4. Approval channel interface and coordinator
 
 ### 4.1 Interface

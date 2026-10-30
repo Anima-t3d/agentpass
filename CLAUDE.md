@@ -42,9 +42,13 @@ agentpass/
 │   ├── preview/
 │   │   ├── model.py          # Preview/Section/Unavailable dataclasses, digest, JSON round trip
 │   │   ├── service.py        # PreviewService: GET-only lookups + template renderer, never raises
-│   │   ├── renderers.py      # Built-in renderers (entity_state); pure functions, no HTML
+│   │   ├── renderers.py      # Built-in renderers (entity_state, resource_summary); pure functions, no HTML
+│   │   ├── email_render.py   # email renderer (gmail_send_message): decodes signed raw, text only
+│   │   ├── diff_render.py    # diff renderer (gh_put_contents): unified diff, sha binding, size limits
+│   │   ├── htmltext.py       # whitelist HTML-to-text converter for the email renderer
+│   │   ├── timefmt.py        # lookup timestamps in approval.display_timezone with relative age
 │   │   └── sanitize.py       # control/bidi escape and strip, sanitize_note (agent_note)
-│   ├── dashboard/            # Audit + remembered-rules pages (admin socket): list and revoke only
+│   ├── dashboard/            # Audit (incl. preview digest/title/status, agent note) + remembered-rules pages (admin socket): list and revoke only
 │   ├── passkey/
 │   │   ├── channel.py        # Passkey approval channel
 │   │   ├── page.py           # Approval page (aiohttp, loopback, private network only)
@@ -56,9 +60,12 @@ agentpass/
 │       └── http.py           # Generic HTTP service (any API via YAML)
 ├── tools/
 │   ├── homeassistant.yaml    # HA tool definitions
-│   └── github.yaml           # GitHub tools (reads allow, writes ask, destructive deny)
+│   ├── github.yaml           # GitHub tools (reads allow, writes ask, destructive deny), with previews
+│   ├── gmail.yaml            # Gmail tools; gmail_send_message has an email preview
+│   ├── calendar.yaml         # Calendar tools; create_event pins sendUpdates
+│   └── drive.yaml            # Drive tools
 ├── policy/
-│   └── github.yaml           # Shared rule set for the GitHub tools (extends: [github])
+│   └── github.yaml           # Shared rule set for the GitHub tools (extends: [github]); main/master writes denied by default
 ├── tests/                    # see pytest
 ├── specs/                    # Feature specs (dated)
 ├── config.example.yaml

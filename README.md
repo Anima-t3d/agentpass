@@ -387,6 +387,22 @@ Approval requests fan out to every channel configured for the rule:
 
 The passkey page is an aiohttp app on loopback. Publish it only on a private network (for example with `tailscale serve`), set `passkey.rp_id` and `passkey.origin` to that name, and enrol a device with `agentpass passkey enroll`. Only public keys are stored on the host. An `ask` rule can require a channel kind (`approval: { require: passkey }`, or `telegram`, default `any_trusted`) so a chat button cannot approve high-risk calls. For such a request the Telegram message says "🔐 Needs passkey approval" and shows an **Approve with passkey** link button to `passkey.origin` plus **Deny** (a trusted deny needs no passkey); there is no Allow button. If the passkey page is not enabled the message says so instead of linking, and `agentpass check-config` reports a passkey rule with no passkey channel as an error. Resolving on the page updates the Telegram message like any other resolution. Use the `channels:` list in `config.yaml` instead of the `messenger:` shorthand to configure several. See [docs/DESIGN.md](docs/DESIGN.md) for the threat model and the approval proof.
 
+### Approval previews
+
+A tool can declare a `preview:` block so the approver sees what the call will do. The passkey page shows the full preview; Telegram shows a short summary and a link; webhook and command channels never get one. The gateway builds it from the validated args and from read-only `GET` lookups it makes itself, so nothing the agent writes appears in the trusted part. If a preview cannot be built, the page says "Preview unavailable" and shows the raw arguments.
+
+| Renderer | Used by | Shows |
+| --- | --- | --- |
+| `template` | Calendar, issues, pull requests | Fields filled from args and lookups |
+| `entity_state` | `ha_call_service`, `ha_fire_event` | Device, current state, effect |
+| `resource_summary` | `gh_delete_repo` | What is removed, repository facts, typed confirmation of the repo name |
+| `email` | `gmail_send_message` | Headers, text body, links, attachment list, header warnings. HTML mail is shown as converted text and nothing remote is fetched |
+| `diff` | `gh_put_contents` | New file or unified diff, commit message, base sha check, default branch warning. Binary and oversized files show sizes and hashes |
+
+Every tool gets an optional `agent_note` property: a short "why I need this" shown to the approver in a box marked as unverified agent text. Agents should fill it in for calls that may need a passkey approval. It is not signed and not used for policy. The audit dashboard lists each request's preview title, status and digest plus the agent note.
+
+`agentpass check-config` warns about a `risk: high` tool without a `preview:` block. The format is documented in `config.example.yaml`. Writes to `main` or `master` through `gh_put_contents` and `gh_create_branch` are denied by default in `policy/github.yaml` unless an agent rule allows that repository.
+
 ### Offline validation
 
 ```bash
@@ -497,6 +513,8 @@ tools:
       wrap: "key_name" # Wrap response in {"key_name": data}
     risk: low|medium|high # Shown in the approval message; gates "Allow always" (see below)
     remember: args|signature # What "Allow always, exact call" matches. Default: args
+    audit: { redact_args: [body] } # Args replaced in the audit log
+    preview: { ... } # What the approver sees; see "Approval previews" and config.example.yaml
 ```
 
 **`risk`** is a display hint and also limits remembered decisions: a tool with `risk: high` never

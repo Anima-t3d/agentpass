@@ -207,7 +207,7 @@ An MCP client such as Hermes can only fill the arguments the tool's `inputSchema
 "agent_note": {
   "type": "string",
   "maxLength": 500,
-  "description": "Optional: explain to the human approver why you need this call. Shown to them as unverified agent text."
+  "description": "Optional: explain to the human approver why you need this call. Shown to them as unverified agent text. Fill it in for calls that may need a passkey approval, so the approver knows what to expect."
 }
 ```
 

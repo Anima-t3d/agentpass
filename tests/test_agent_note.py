@@ -22,7 +22,8 @@ env = test_mcp.env  # the MCP fixture: real Pipeline, registry, DB; fake channel
 
 NOTE_DESC = (
     "Optional: explain to the human approver why you need this call. "
-    "Shown to them as unverified agent text."
+    "Shown to them as unverified agent text. Fill it in for calls that may need a "
+    "passkey approval, so the approver knows what to expect."
 )
 
 
