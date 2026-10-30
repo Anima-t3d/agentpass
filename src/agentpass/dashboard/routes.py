@@ -76,6 +76,10 @@ def _entry_to_dict(entry: Any) -> dict[str, Any]:
         "resolved_at": entry.resolved_at,
         "execution_result": entry.execution_result,
         "agent_id": entry.agent_id,
+        "preview_digest": entry.preview_digest,
+        "preview_title": entry.preview_title,
+        "preview_status": entry.preview_status,
+        "agent_note": entry.agent_note,  # unverified text from the agent
     }
 
 

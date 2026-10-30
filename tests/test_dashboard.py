@@ -243,3 +243,44 @@ class TestAuditStats:
         assert stats["top_tools"][0]["name"] == "tool_a"
         assert stats["top_tools"][0]["count"] == 5
         assert stats["top_tools"][1]["name"] == "tool_b"
+
+
+class TestPreviewAndNote:
+    async def _seed(self, db):
+        await db.log_audit(
+            AuditEntry(
+                request_id="r1",
+                tool_name="gmail_send_message",
+                decision="ask",
+                resolution="approved",
+                preview_digest="d" * 64,
+                preview_title="Send email to bob@example.com",
+                preview_status="partial",
+                agent_note="<script>alert(1)</script> please",
+            )
+        )
+        await db.log_audit(AuditEntry(request_id="r2", tool_name="ha_get_state", decision="allow"))
+
+    async def test_api_carries_digest_title_status_and_note(self, client, db):
+        await self._seed(db)
+        data = await (await client.get("/audit/api/log")).json()
+        by_id = {e["request_id"]: e for e in data["entries"]}
+        assert by_id["r1"]["preview_digest"] == "d" * 64
+        assert by_id["r1"]["preview_title"] == "Send email to bob@example.com"
+        assert by_id["r1"]["preview_status"] == "partial"
+        assert by_id["r1"]["agent_note"].startswith("<script>")
+        assert by_id["r2"]["preview_digest"] is None and by_id["r2"]["agent_note"] is None
+
+    async def test_page_shows_them_labelled_and_escaped(self, client, db):
+        await self._seed(db)
+        text = await (await client.get("/audit/")).text()
+        assert "Send email to bob@example.com" in text and "d" * 64 in text
+        assert "Unverified text from the agent" in text
+        assert "<script>alert(1)</script>" not in text
+        assert "&lt;script&gt;alert(1)&lt;/script&gt; please" in text
+
+    async def test_page_without_previews_has_no_preview_boxes(self, client, db):
+        await _seed_entries(db, 2)
+        text = await (await client.get("/audit/")).text()
+        assert "<h4>Unverified text from the agent</h4>" not in text
+        assert "<h4>Preview shown to the approver</h4>" not in text

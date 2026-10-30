@@ -133,6 +133,11 @@
   .badge-timed_out { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
   .badge-executed { background: rgba(108, 140, 255, 0.15); color: var(--accent); }
 
+  .badge-preview-ok { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .badge-preview-partial, .badge-preview-unavailable { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
+  .note-box { border-left: 3px solid var(--amber); }
+  .digest { word-break: break-all; }
+
   .sig { font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
   .ts { color: var(--text-dim); white-space: nowrap; font-size: 12px; }
 
@@ -271,6 +276,7 @@
           <th>Decision</th>
           <th>Resolution</th>
           <th>Resolved By</th>
+          <th>Preview</th>
         </tr>
       </thead>
       <tbody>
@@ -288,9 +294,15 @@
             {% endif %}
           </td>
           <td style="color: var(--text-dim);">{% if entry.resolved_by %}{{ entry.resolved_by }}{% else %}&mdash;{% endif %}</td>
+          <td>
+            {% if entry.preview_status %}
+            <span class="badge badge-preview-{{ entry.preview_status.split(':')[0] }}">{{ entry.preview_status }}</span>
+            {% if entry.preview_title %}<div class="ts" style="white-space: normal;">{{ entry.preview_title | truncate(60) }}</div>{% endif %}
+            {% else %}<span style="color: var(--text-dim);">&mdash;</span>{% endif %}
+          </td>
         </tr>
         <tr class="detail-row" id="detail-{{ loop.index }}">
-          <td colspan="6">
+          <td colspan="7">
             <div class="detail-content">
               <div class="detail-section">
                 <h4>Arguments</h4>
@@ -300,6 +312,20 @@
                 <h4>Execution Result</h4>
                 <pre>{% if entry.execution_result %}{{ entry.execution_result | tojson(indent=2) }}{% else %}No result{% endif %}</pre>
               </div>
+              {% if entry.preview_status %}
+              <div class="detail-section">
+                <h4>Preview shown to the approver</h4>
+                <pre>Title: {{ entry.preview_title or '(none)' }}
+Status: {{ entry.preview_status }}{% if entry.preview_digest %}
+Digest: <span class="digest">{{ entry.preview_digest }}</span>{% endif %}</pre>
+              </div>
+              {% endif %}
+              {% if entry.agent_note %}
+              <div class="detail-section">
+                <h4>Unverified text from the agent</h4>
+                <pre class="note-box">{{ entry.agent_note }}</pre>
+              </div>
+              {% endif %}
               <div class="detail-section">
                 <h4>Request Details</h4>
                 <pre>Request ID: {{ entry.request_id }}
