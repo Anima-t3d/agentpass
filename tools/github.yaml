@@ -345,7 +345,7 @@ tools:
     risk: medium
 
   gh_update_issue:
-    description: "Change an issue: title, body, state or labels"
+    description: "Change an issue: title, body, state (with state_reason) or labels"
     signature: "{owner}/{repo}, {number}"
     args:
       owner: *owner
@@ -354,6 +354,7 @@ tools:
       title: { type: string, max_length: 256, signature: false }
       body: { type: text, max_length: 65536 }
       state: { type: enum, values: [open, closed], signature: false }
+      state_reason: { type: enum, values: [completed, not_planned, reopened], signature: false, description: "Why the state changes, e.g. not_planned when closing" }
       labels:
         type: array
         items: { type: string, max_length: 50 }
@@ -370,6 +371,7 @@ tools:
         - { label: "Issue now", value: "#{number} {current.title} ({current.state})" }
         - { label: "New title", value: "{title}" }
         - { label: "New state", value: "{state}" }
+        - { label: "Reason", value: "{state_reason}" }
         - { label: "Labels now", value: "{current.labels}" }
         - { label: "New labels (replace all)", value: "{labels}" }
         - { label: "Body now", value: "{current.body}" }
@@ -378,7 +380,7 @@ tools:
       method: PATCH
       path: "/repos/{owner}/{repo}/issues/{number}"
       headers: *headers
-      body: { include: [title, body, state, labels] }
+      body: { include: [title, body, state, state_reason, labels] }
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium

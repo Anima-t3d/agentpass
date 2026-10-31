@@ -121,6 +121,24 @@ def test_create_branch_body_pins_the_ref():
     assert tool.request.body_map == {"ref": "refs/heads/{branch}"}
 
 
+def test_update_issue_takes_a_state_reason():
+    reg = _registry()
+    args = {
+        "owner": "o",
+        "repo": "r",
+        "number": 7,
+        "state": "closed",
+        "state_reason": "not_planned",
+    }
+    validate_args("gh_update_issue", args, reg)
+    assert "state_reason" in reg.get_tool("gh_update_issue").request.body_include
+    try:
+        validate_args("gh_update_issue", args | {"state_reason": "wontfix"}, reg)
+    except ValueError:
+        return
+    raise AssertionError("accepted an unknown state_reason")
+
+
 async def test_update_issue_preview_shows_current_and_new():
     issue = {"title": "Old title", "state": "open", "body": "old", "labels": []}
     p = await build(
@@ -131,6 +149,7 @@ async def test_update_issue_preview_shows_current_and_new():
     rows = dict(section(p, "Details").data)
     assert rows["Issue now"] == "#7 Old title (open)"
     assert rows["New title"] == "New title" and rows["New state"] == "closed"
+    assert "Reason" not in rows  # no state_reason given
     assert "New body" not in rows  # unchanged fields are not shown as changing
 
 
