@@ -153,7 +153,10 @@ def _parse_rules(items: Any, path: Path, what: str) -> list[PermissionRule]:
 
 
 def load_floor(policy_dir: Path) -> list[PermissionRule]:
-    """Gateway-wide deny rules (policy/_floor.yaml). Missing file means no floor."""
+    """Gateway-wide deny and ask rules (policy/_floor.yaml). Missing file means no floor.
+
+    Floor denies beat everything; floor asks beat every allow and are never remembered.
+    """
     path = policy_dir / FLOOR_FILE
     if not path.exists():
         return []
@@ -161,8 +164,11 @@ def load_floor(policy_dir: Path) -> list[PermissionRule]:
     _check_keys(raw, {"rules"}, path)
     rules = _parse_rules(raw.get("rules"), path, "rules")
     for rule in rules:
-        if rule.action != "deny":
-            raise ConfigError(f"{path}: the floor may only contain deny rules")
+        if rule.action not in ("deny", "ask"):
+            raise ConfigError(
+                f"{path}: the floor may only contain deny and ask rules "
+                f"(rule {rule.pattern!r} is {rule.action}); an allow cannot be a floor"
+            )
     return rules
 
 
@@ -227,8 +233,13 @@ def load_agent_file(path: Path, policy_dir: Path, floor: list[PermissionRule]) -
         defaults += ed
         rules += er
 
-    # Deny always wins in the engine, so floor denies cannot be overridden
-    permissions = Permissions(defaults=defaults, rules=[*floor, *rules])
+    # Deny always wins in the engine, so floor denies cannot be overridden; floor asks
+    # sit above every allow (engine.evaluate)
+    permissions = Permissions(
+        defaults=defaults,
+        rules=[*(r for r in floor if r.action == "deny"), *rules],
+        floor_ask=[r for r in floor if r.action == "ask"],
+    )
     return AgentIdentity(
         id=agent_id,
         token_hash=digest,

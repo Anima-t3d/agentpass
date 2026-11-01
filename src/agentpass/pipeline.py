@@ -380,7 +380,7 @@ class Pipeline:
         verdict = None
         if self._remembered is not None and decision is not Decision.DENY:
             verdict = await self._remembered.resolve(
-                agent, tool, signature, args, decision, evaluation.approval
+                agent, tool, signature, args, decision, evaluation.approval, evaluation.floor
             )
             if verdict is not None:
                 decision = verdict.decision
@@ -410,6 +410,9 @@ class Pipeline:
         )
         if verdict is not None:
             await self._remembered.touch(verdict.rule["id"])
+        if evaluation.floor and verdict is None:
+            # No audit column for this: the log line carries the request id of the audit row
+            logger.info("Policy floor ask rule decided request %s (%s)", request.id, tool)
 
         if decision == Decision.ALLOW:
             data = await self._execute(request)
@@ -419,7 +422,9 @@ class Pipeline:
         cap = identity.max_pending or self._max_pending
         if sum(1 for p in self._pending.values() if p.agent_id == agent) >= cap:
             raise RateLimited("Too many pending approvals", request_id=request.id)
-        return await self._ask(request, identity, on_pending, evaluation.approval, agent_note)
+        return await self._ask(
+            request, identity, on_pending, evaluation.approval, agent_note, evaluation.floor
+        )
 
     def _audit_args(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         return self._registry.redact_args(tool, args) if self._registry else args
@@ -449,6 +454,7 @@ class Pipeline:
         on_pending: PendingCallback | None = None,
         approval: ApprovalSpec | None = None,
         agent_note: str | None = None,
+        floor: bool = False,
     ) -> Outcome:
         request_id = request.id
         timeout = (
@@ -467,7 +473,9 @@ class Pipeline:
             expires_at=expires_at_epoch,
             agent_note=agent_note,
             remember=(
-                self._remembered.offer(request.tool_name, request.signature, request.args, approval)
+                self._remembered.offer(
+                    request.tool_name, request.signature, request.args, approval, floor
+                )
                 if self._remembered is not None
                 else None
             ),

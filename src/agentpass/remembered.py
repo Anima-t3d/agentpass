@@ -69,11 +69,13 @@ def effective_risk(tool: ToolDefinition | None, approval: ApprovalSpec | None) -
 
 
 def allow_blocker(
-    tool: ToolDefinition | None, approval: ApprovalSpec | None, scope: str
+    tool: ToolDefinition | None, approval: ApprovalSpec | None, scope: str, floor: bool = False
 ) -> str | None:
     """Why a remembered *allow* of *scope* must not apply to this tool, or None if it may."""
     if tool is None:
         return "tool removed"
+    if floor:
+        return "covered by a floor rule"
     if approval is not None and approval.require == "passkey":
         return "rule requires a passkey"
     risk = effective_risk(tool, approval)
@@ -94,14 +96,15 @@ def build_offer(
     approval: ApprovalSpec | None,
     signature: str,
     args: dict[str, Any],
+    floor: bool = False,
 ) -> RememberOffer | None:
     """The "always" answers to show for one request; None when none is possible."""
     if tool is None:
         return None
     shown = len(signature) <= MAX_SIGNATURE_LEN
     return RememberOffer(
-        allow_exact=shown and allow_blocker(tool, approval, "exact") is None,
-        allow_tool=shown and allow_blocker(tool, approval, "tool") is None,
+        allow_exact=shown and allow_blocker(tool, approval, "exact", floor) is None,
+        allow_tool=shown and allow_blocker(tool, approval, "tool", floor) is None,
         deny_exact=shown,
         deny_tool=shown,
         args_hash=args_hash(args) if tool.remember == "args" else None,
@@ -126,12 +129,14 @@ def rule_state(
     now_iso: str,
     agent_known: Callable[[str], bool] = lambda _agent: True,
     approval_for: Callable[[str, str, str], ApprovalSpec | None] | None = None,
+    floor_for: Callable[[str, str, str], bool] | None = None,
 ) -> tuple[str, str]:
     """(state, reason) of a stored rule: active | expired | revoked | inactive.
 
     *approval_for(agent, tool, signature)* gives the approval block of the rule that
     currently produces ``ask`` for an exact call, so a rule that now needs a passkey is
-    reported. Tool-scope rules are judged on the tool alone.
+    reported. *floor_for* says whether a floor ask rule covers that call (an allow is then
+    inactive). Tool-scope rules are judged on the tool alone.
     """
     if rule["revoked_at"]:
         return "revoked", ""
@@ -147,9 +152,13 @@ def rule_state(
     if rule["tool_fingerprint"] != tool_fingerprint(tool):
         return "inactive", "tool changed"
     approval = None
-    if approval_for is not None and rule["scope"] == "exact":
-        approval = approval_for(rule["agent_id"], rule["tool_name"], rule["signature"] or "")
-    blocker = allow_blocker(tool, approval, rule["scope"])
+    floor = False
+    if rule["scope"] == "exact":
+        call = (rule["agent_id"], rule["tool_name"], rule["signature"] or "")
+        if approval_for is not None:
+            approval = approval_for(*call)
+        floor = floor_for is not None and floor_for(*call)
+    blocker = allow_blocker(tool, approval, rule["scope"], floor)
     if blocker:
         return "inactive", f"policy: {blocker}"
     return "active", ""
@@ -189,11 +198,13 @@ class RememberedService:
         *,
         agent_known: Callable[[str], bool] = lambda _agent: True,
         approval_for: Callable[[str, str, str], ApprovalSpec | None] | None = None,
+        floor_for: Callable[[str, str, str], bool] | None = None,
     ) -> None:
         self._db = db
         self._registry = registry
         self._agent_known = agent_known
         self._approval_for = approval_for
+        self._floor_for = floor_for
 
     # --- Pipeline ---
 
@@ -203,9 +214,10 @@ class RememberedService:
         signature: str,
         args: dict[str, Any],
         approval: ApprovalSpec | None,
+        floor: bool = False,
     ) -> RememberOffer | None:
         tool = self._registry.get_tool(tool_name) if self._registry else None
-        return build_offer(tool, approval, signature, args)
+        return build_offer(tool, approval, signature, args, floor)
 
     async def resolve(
         self,
@@ -215,11 +227,13 @@ class RememberedService:
         args: dict[str, Any],
         static: Decision,
         approval: ApprovalSpec | None,
+        floor: bool = False,
     ) -> RememberedVerdict | None:
         """The remembered rule that settles this call, or None (docs section 2, steps 2-4).
 
         Step 1 (a static deny) is the caller's: it must not call this for a denied call.
-        A deny rule wins over a static allow. An allow rule applies only when the static
+        A deny rule wins over a static allow. A floor ask (*floor*) is never turned into an
+        allow. An allow rule applies only when the static
         verdict is ``ask`` and the rule is still eligible under current policy and tool.
         """
         rules = await self._db.candidate_remembered_rules(agent_id, tool_name, iso())
@@ -240,7 +254,7 @@ class RememberedService:
         for rule in sorted(hits, key=lambda r: r["scope"] != "exact"):
             if rule["tool_fingerprint"] != fingerprint:
                 continue
-            if allow_blocker(tool, approval, rule["scope"]) is None:
+            if allow_blocker(tool, approval, rule["scope"], floor) is None:
                 return RememberedVerdict(Decision.ALLOW, rule)
         return None
 
@@ -334,6 +348,7 @@ class RememberedService:
             now_iso=iso(),
             agent_known=self._agent_known,
             approval_for=self._approval_for,
+            floor_for=self._floor_for,
         )
 
     async def list_rules(

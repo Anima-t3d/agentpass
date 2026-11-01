@@ -466,6 +466,8 @@ def approval_findings(
 class Permissions:
     defaults: list[PermissionRule]
     rules: list[PermissionRule]
+    # Policy-floor ask rules (policy/_floor.yaml): they beat every allow, in file order
+    floor_ask: list[PermissionRule] = field(default_factory=list)
 
 
 # --- Helpers ---

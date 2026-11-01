@@ -1,0 +1,16 @@
+# Example policy floor. Copy to _floor.yaml (same directory) to enable it.
+#
+# The floor holds deny and ask rules that no agent file or shared rule set can
+# relax. `allow` is not accepted here.
+#   deny: beats everything.
+#   ask:  beats every allow (agent, rule set, remembered "Allow always"), and the
+#         first matching ask in this file supplies the `approval` block.
+# Patterns match the call signature, like any other rule.
+rules:
+  - pattern: "gmail_delete_*"
+    action: deny
+    description: Never delete mail
+  - pattern: "gmail_send_message*"
+    action: ask
+    description: Sending mail always reaches a human, on a passkey
+    approval: { require: passkey }

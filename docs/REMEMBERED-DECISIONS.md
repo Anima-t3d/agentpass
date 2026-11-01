@@ -56,14 +56,14 @@ Rows are never deleted: revoked and expired rules remain as history.
 In `Pipeline._run`, after validation and signature building, unchanged rate limiter first (so rate limits and pending limits apply exactly as today):
 
 ```
-static   = engine.evaluate(...)                 # floor + agent-file + extends, as today
+static   = engine.evaluate(...)                 # floor + agent-file + extends; static.floor is true when a floor ask decided it
 rule     = remembered.match(agent, tool, signature, args_hash, now)   # active, unexpired, unrevoked, may be None
 
 1. static is DENY                        -> DENY   (floor / agent / extends deny; remembered rules not even consulted)
 2. rule is a deny                        -> DENY   (behaves like an agent deny rule: beats a static allow)
-3. static is ALLOW                       -> ALLOW
+3. static is ALLOW                       -> ALLOW   (a floor ask is never ALLOW: it beats every allow)
 4. static is ASK and rule is an allow
-      and allow_eligible(rule, tool_def, static.approval)   -> ALLOW, audited as remembered rule #id
+      and allow_eligible(rule, tool_def, static.approval, static.floor)   -> ALLOW, audited as remembered rule #id
 5. otherwise                             -> ASK    (normal prompt, pending cap applies)
 ```
 
@@ -109,7 +109,7 @@ Step 1 (the approval message):
 [Allow always...] [Deny always...]      <- second row; "Allow always..." omitted when not eligible
 ```
 
-Eligibility is computed in the pipeline when it builds the `ApprovalRequest` and passed to channels as `req.remember = RememberOffer(allow_exact, allow_tool, deny_exact, deny_tool, allow_expires, ...)`. "Allow always" is **not offered** when: the rule requires passkey; effective risk is high (or unknown, see above); the signature is too long to be shown in full in the scope step (> 1500 chars); the request came from a floor or explicit deny (no prompt exists). The `tool` scope is additionally not offered when risk is high/unknown/unset. "Deny always" is offered for every prompt except passkey-required ones, which show only the passkey link and a plain Deny in Telegram; high-risk prompts still offer it (deny is always safe, both scopes).
+Eligibility is computed in the pipeline when it builds the `ApprovalRequest` and passed to channels as `req.remember = RememberOffer(allow_exact, allow_tool, deny_exact, deny_tool, allow_expires, ...)`. "Allow always" is **not offered** when: the rule requires passkey; a floor `ask` rule in `policy/_floor.yaml` covers the call (it must always reach a human, so neither allow scope is offered and an older remembered allow is ignored at lookup time; Deny always is still offered and a remembered deny still applies); effective risk is high (or unknown, see above); the signature is too long to be shown in full in the scope step (> 1500 chars); the request came from a floor or explicit deny (no prompt exists). The `tool` scope is additionally not offered when risk is high/unknown/unset. "Deny always" is offered for every prompt except passkey-required ones, which show only the passkey link and a plain Deny in Telegram; high-risk prompts still offer it (deny is always safe, both scopes).
 
 Step 2 (after tapping "Allow always..." or "Deny always..."): the message is edited in place to show exactly what will be stored, then waits for a scope tap:
 
@@ -190,6 +190,7 @@ Assumption: the attacker controls an agent (token, prompts, tool call content) o
 | Social engineering: look benign once, get permanent trust | Exact is the default; allow rules expire (90/30 days); tool scope is hidden for high/unknown risk; scope step shows the stored pattern and expiry in full. Residual: the operator approving something harmful once and choosing "always" is still the operator's decision. |
 | Prompt fatigue to push the operator into "always" | Rate and pending limits unchanged. "Always" reduces total prompts for repeated identical calls, which is the point. Daily-volume anomalies still visible in audit. |
 | Override of a floor or agent deny | Impossible: static deny is step 1, before remembered rules are read. Remembered allow only acts when static is `ask`. |
+| Floor ask rule added later | Eligibility is re-checked on every call: a remembered allow stops working once a floor `ask` covers the call; remembered denies still apply. |
 | Policy tightened later (passkey added, risk raised) | Eligibility is re-evaluated on every call against current policy; a stale allow is ignored, not honoured. |
 | Passkey or high-risk action approved by "always" from Telegram | Not offered, and rejected server-side if the callback is forged; also ignored at match time if it somehow existed. |
 | Forged, forwarded or replayed callback | Checked against `allowed_users` and chat id; the request must still be pending; pattern is rebuilt server-side; the scope code is validated against what was offered. |

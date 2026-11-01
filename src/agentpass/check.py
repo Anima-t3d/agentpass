@@ -270,7 +270,11 @@ def lint_permissions(
                 )
                 break
 
-    for kind, rules in (("default", perms.defaults), ("rule", perms.rules)):
+    for kind, rules in (
+        ("default", perms.defaults),
+        ("rule", perms.rules),
+        ("rule", perms.floor_ask),
+    ):
         for rule in rules:
             _lint_rule(label, kind, rule, names, registry, report)
 
@@ -547,7 +551,7 @@ def check(config_path: str, permissions_path: str, env: dict[str, str] | None = 
         policies += [(f"agent {a.id}", a.permissions) for a in agents]
         for label, perms in policies:
             lint_permissions(label, perms, registry, report)
-            rules = [*perms.defaults, *perms.rules]
+            rules = [*perms.defaults, *perms.rules, *perms.floor_ask]
             _guard(report, label, validate_rule_channels, rules, config.channels)
             for kind, message in approval_findings(rules, config.channels):
                 if kind == "passkey-without-channel":
@@ -599,11 +603,23 @@ def _lint_remembered(
         verdict = engine.evaluate(tool, {}, signature=signature)
         return verdict.approval if verdict.decision is Decision.ASK else None
 
+    def floor_for(agent_id: str, tool: str, signature: str) -> bool:
+        agent = by_id.get(agent_id)
+        if agent is None or agent.permissions is None:
+            return False
+        engine = engines.setdefault(agent_id, PermissionEngine(agent.permissions, registry))
+        return engine.evaluate(tool, {}, signature=signature).floor
+
     known = (lambda agent_id: agent_id in by_id) if agents else (lambda _agent_id: True)
     active = 0
     for rule in rules:
         state, reason = rule_state(
-            rule, registry, now_iso=iso(), agent_known=known, approval_for=approval_for
+            rule,
+            registry,
+            now_iso=iso(),
+            agent_known=known,
+            approval_for=approval_for,
+            floor_for=floor_for,
         )
         if state == "active":
             active += 1

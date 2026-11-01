@@ -409,7 +409,7 @@ async def run(args: argparse.Namespace) -> None:
         else [permissions]
     )
     for policy in policies:
-        rules = [*policy.defaults, *policy.rules]
+        rules = [*policy.defaults, *policy.rules, *policy.floor_ask]
         validate_rule_channels(rules, config.channels)
         for warning in approval_warnings(rules, config.channels):
             logger.warning(warning)
@@ -425,8 +425,16 @@ async def run(args: argparse.Namespace) -> None:
         )
         return verdict.approval if verdict.decision is Decision.ASK else None
 
+    def _floor_for(agent_id: str, tool: str, signature: str) -> bool:
+        identity = agent_registry.get(agent_id) if agent_registry else None
+        return (
+            ((identity.engine if identity else None) or engine)
+            .evaluate(tool, {}, signature=signature)
+            .floor
+        )
+
     remembered = RememberedService(
-        db, registry, agent_known=_agent_known, approval_for=_approval_for
+        db, registry, agent_known=_agent_known, approval_for=_approval_for, floor_for=_floor_for
     )
     logger.info("Remembered rules: %s", format_summary(await remembered.counts()))
 

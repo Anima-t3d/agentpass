@@ -211,7 +211,7 @@ class ApprovalChannel(ABC):
   secrets.yaml          # 0600; ${secret:name} targets
   services/<name>.yaml  # one file per upstream service/account
   tools/<name>.yaml     # tool definitions (extended, section 8)
-  policy/_floor.yaml    # gateway-wide deny rules that no agent file can override
+  policy/_floor.yaml    # gateway-wide deny and ask rules that no agent file can relax
   agents/<agent>.yaml   # identity + that agent's permission rules
 ```
 
@@ -259,7 +259,7 @@ rules:                             # order irrelevant; deny always wins
 ```
 
 - Pattern syntax is unchanged: `fnmatch` on `tool(signature)`, signature from the tool template, built once with the registry.
-- Evaluation order: deny rules from `policy/_floor.yaml`, then the agent's deny rules, then allow, then ask, then the agent's `defaults` (first match), then fallback `ask`. A floor deny cannot be overridden by any agent file. There are no cross-agent rules: each agent file stands alone.
+- Evaluation order: deny rules from `policy/_floor.yaml`, then the agent's deny rules (agent file and its rule sets), then remembered denies, then the floor's `ask` rules, then allow rules (agent file, rule sets, remembered), then the agent's `ask` rules, then the agent's `defaults` (first match), then fallback `ask`. A floor deny cannot be overridden by any agent file. A floor `ask` beats every allow, remembered ones included; the first matching floor ask in file order wins and its `approval` block is the one the request gets, so a weaker agent ask rule cannot replace it. `allow` in the floor is a config error. The floor is a ceiling on what can be allowed, not a rule set to extend: use it for calls that must always reach a human (for example `approval: {require: passkey}`). Audit: the decision is `ask` as usual and the gateway log carries a line naming the request id when a floor ask decided it. There are no cross-agent rules: each agent file stands alone.
 - New optional fields per rule: `approval.require`, `approval.timeout`, `approval.channels`, `risk` (`low|medium|high`, display hint only).
 - Tool names not in the registry are rejected before evaluation. Rules that name no tool are warnings in `check-config`.
 

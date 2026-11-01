@@ -40,7 +40,7 @@ agent:
   # Per-agent identities REPLACE the shared token (setting both is a config error):
   #   agentpass agent create my-agent --config config.yaml   # writes <config dir>/agents; prints the token once
   # agents_dir: agents      # agents/NAME.yaml: id, token_hash, rate_limit, rules, extends
-  # policy_dir: policy      # policy/_floor.yaml (denies no agent can override) + shared sets
+  # policy_dir: policy      # policy/_floor.yaml (deny/ask rules no agent can relax) + shared sets
 
 # MCP frontend (streamable HTTP, POST /mcp, Bearer agp_<id>_<secret>). Needs agent.agents_dir.
 # Own app and port, loopback only, never the healthz or dashboard app.
