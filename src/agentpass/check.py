@@ -603,11 +603,13 @@ def _lint_remembered(
         verdict = engine.evaluate(tool, {}, signature=signature)
         return verdict.approval if verdict.decision is Decision.ASK else None
 
-    def floor_for(agent_id: str, tool: str, signature: str) -> bool:
+    def floor_for(agent_id: str, tool: str, signature: str | None) -> bool:
         agent = by_id.get(agent_id)
         if agent is None or agent.permissions is None:
             return False
         engine = engines.setdefault(agent_id, PermissionEngine(agent.permissions, registry))
+        if signature is None:
+            return engine.floor_may_cover(tool)
         return engine.evaluate(tool, {}, signature=signature).floor
 
     known = (lambda agent_id: agent_id in by_id) if agents else (lambda _agent_id: True)

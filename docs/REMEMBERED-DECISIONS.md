@@ -61,7 +61,7 @@ rule     = remembered.match(agent, tool, signature, args_hash, now)   # active, 
 
 1. static is DENY                        -> DENY   (floor / agent / extends deny; remembered rules not even consulted)
 2. rule is a deny                        -> DENY   (behaves like an agent deny rule: beats a static allow)
-3. static is ALLOW                       -> ALLOW   (a floor ask is never ALLOW: it beats every allow)
+3. static is ALLOW                       -> ALLOW   (a floor ask raised any non-deny verdict to ASK already, so a floor-covered call never lands here)
 4. static is ASK and rule is an allow
       and allow_eligible(rule, tool_def, static.approval, static.floor)   -> ALLOW, audited as remembered rule #id
 5. otherwise                             -> ASK    (normal prompt, pending cap applies)
@@ -109,7 +109,7 @@ Step 1 (the approval message):
 [Allow always...] [Deny always...]      <- second row; "Allow always..." omitted when not eligible
 ```
 
-Eligibility is computed in the pipeline when it builds the `ApprovalRequest` and passed to channels as `req.remember = RememberOffer(allow_exact, allow_tool, deny_exact, deny_tool, allow_expires, ...)`. "Allow always" is **not offered** when: the rule requires passkey; a floor `ask` rule in `policy/_floor.yaml` covers the call (it must always reach a human, so neither allow scope is offered and an older remembered allow is ignored at lookup time; Deny always is still offered and a remembered deny still applies); effective risk is high (or unknown, see above); the signature is too long to be shown in full in the scope step (> 1500 chars); the request came from a floor or explicit deny (no prompt exists). The `tool` scope is additionally not offered when risk is high/unknown/unset. "Deny always" is offered for every prompt except passkey-required ones, which show only the passkey link and a plain Deny in Telegram; high-risk prompts still offer it (deny is always safe, both scopes).
+Eligibility is computed in the pipeline when it builds the `ApprovalRequest` and passed to channels as `req.remember = RememberOffer(allow_exact, allow_tool, deny_exact, deny_tool, allow_expires, ...)`. "Allow always" is **not offered** when: the rule requires passkey; a floor `ask` rule in `policy/_floor.yaml` covers the call (it must always reach a human, so neither allow scope is offered and an older remembered allow is ignored at lookup time; the dashboard and check-config list a tool-scope allow as inactive, "policy: covered by a floor rule", when a floor ask may match its tool; Deny always is still offered and a remembered deny still applies); effective risk is high (or unknown, see above); the signature is too long to be shown in full in the scope step (> 1500 chars); the request came from a floor or explicit deny (no prompt exists). The `tool` scope is additionally not offered when risk is high/unknown/unset. "Deny always" is offered for every prompt except passkey-required ones, which show only the passkey link and a plain Deny in Telegram; high-risk prompts still offer it (deny is always safe, both scopes).
 
 Step 2 (after tapping "Allow always..." or "Deny always..."): the message is edited in place to show exactly what will be stored, then waits for a scope tap:
 

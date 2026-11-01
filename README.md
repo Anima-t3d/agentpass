@@ -373,7 +373,7 @@ With `mcp.enabled: true` the gateway also serves MCP over streamable HTTP (`POST
 agentpass agent create my-agent --config config.yaml   # prints the token once
 ```
 
-Setting `agent.agents_dir` replaces the shared `agent.token`. Each agent has a file (`agents/NAME.yaml`) with a token hash, rate limit and rules. `agent.policy_dir/_floor.yaml` holds `deny` and `ask` rules that no agent file can relax: a floor deny beats everything, and a floor `ask` (which may carry an `approval:` block such as `require: passkey`) beats every agent or rule-set `allow` and is never turned into an allow by a remembered "Allow always" (`allow` in the floor is a config error; see `policy/_floor.example.yaml`), and shared rule sets (such as `policy/github.yaml`) are pulled in with `extends`. Audit and pending rows record the agent id.
+Setting `agent.agents_dir` replaces the shared `agent.token`. Each agent has a file (`agents/NAME.yaml`) with a token hash, rate limit and rules. `agent.policy_dir/_floor.yaml` holds `deny` and `ask` rules that no agent file can relax: a floor deny beats everything, and a floor `ask` (which may carry an `approval:` block such as `require: passkey`) raises any non-deny verdict, including every agent or rule-set `allow`, to ask (it never changes a deny) and is never turned into an allow by a remembered "Allow always" (`allow` in the floor is a config error; see `policy/_floor.example.yaml`), and shared rule sets (such as `policy/github.yaml`) are pulled in with `extends`. Audit and pending rows record the agent id.
 
 ### Approval channels
 

@@ -156,16 +156,23 @@ class PermissionEngine:
         if signature is None:
             signature = build_signature(tool_name, args, self._registry)
 
-        # Phase 1: Check explicit rules (deny > floor ask > allow > ask)
-        rules = self._permissions.rules
-        for rule in rules:
-            if rule.action == "deny" and fnmatch(signature, rule.pattern):
-                return Evaluation(Decision.DENY, rule.approval)
+        verdict = self._evaluate_rules(signature)
+        if verdict.decision is Decision.DENY:
+            return verdict  # a floor ask never changes a deny
+        # The floor only tightens: any non-deny verdict becomes ask (first match wins)
         for rule in self._permissions.floor_ask:
             if fnmatch(signature, rule.pattern):
                 return Evaluation(Decision.ASK, rule.approval, floor=True)
-        for action_type in ("allow", "ask"):
-            for rule in rules:
+        return verdict
+
+    def floor_may_cover(self, tool_name: str) -> bool:
+        """Could a floor ask rule match some call of *tool_name*? (errs towards True)"""
+        return any(_may_match(r.pattern, tool_name) for r in self._permissions.floor_ask)
+
+    def _evaluate_rules(self, signature: str) -> Evaluation:
+        # Phase 1: Check explicit rules (deny > allow > ask)
+        for action_type in ("deny", "allow", "ask"):
+            for rule in self._permissions.rules:
                 if rule.action == action_type and fnmatch(signature, rule.pattern):
                     return Evaluation(Decision(action_type), rule.approval)
 
@@ -187,8 +194,6 @@ class PermissionEngine:
         rules = self._permissions.rules
         if any(r.action == "deny" and all(fnmatch(p, r.pattern) for p in probes) for r in rules):
             return False
-        if any(_may_match(r.pattern, tool_name) for r in self._permissions.floor_ask):
-            return True
         if any(r.action != "deny" and _may_match(r.pattern, tool_name) for r in rules):
             return True
         for default in self._permissions.defaults:

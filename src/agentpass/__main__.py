@@ -425,13 +425,12 @@ async def run(args: argparse.Namespace) -> None:
         )
         return verdict.approval if verdict.decision is Decision.ASK else None
 
-    def _floor_for(agent_id: str, tool: str, signature: str) -> bool:
+    def _floor_for(agent_id: str, tool: str, signature: str | None) -> bool:
         identity = agent_registry.get(agent_id) if agent_registry else None
-        return (
-            ((identity.engine if identity else None) or engine)
-            .evaluate(tool, {}, signature=signature)
-            .floor
-        )
+        agent_engine = (identity.engine if identity else None) or engine
+        if signature is None:
+            return agent_engine.floor_may_cover(tool)
+        return agent_engine.evaluate(tool, {}, signature=signature).floor
 
     remembered = RememberedService(
         db, registry, agent_known=_agent_known, approval_for=_approval_for, floor_for=_floor_for

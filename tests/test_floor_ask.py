@@ -89,10 +89,33 @@ def test_floor_allow_is_rejected(tmp_path):
         _engine(tmp_path, floor='rules:\n  - { pattern: "*", action: allow }\n')
 
 
-def test_may_permit_keeps_tool_with_floor_ask(tmp_path):
-    engine = _engine(tmp_path, 'defaults:\n  - { pattern: "*", action: deny }\n')
-    assert engine.may_permit("send_mail")
-    assert not engine.may_permit("read_mail")
+def test_floor_ask_never_loosens_a_defaults_deny(tmp_path):
+    engine = _engine(tmp_path, 'defaults:\n  - { pattern: "send_*", action: deny }\n')
+    result = _eval(engine, "send_mail(a)")
+    assert result.decision is Decision.DENY and not result.floor
+    assert not engine.may_permit("send_mail")  # stays hidden
+
+
+def test_floor_ask_never_loosens_a_rule_set_defaults_deny(tmp_path):
+    engine = _engine(
+        tmp_path,
+        "extends: [locked]\n",
+        sets={"locked": 'defaults:\n  - { pattern: "send_*", action: deny }\n'},
+    )
+    assert _eval(engine, "send_mail(a)").decision is Decision.DENY
+    assert not engine.may_permit("send_mail")
+
+
+def test_floor_ask_raises_defaults_allow_and_fallback(tmp_path):
+    engine = _engine(tmp_path, 'defaults:\n  - { pattern: "send_*", action: allow }\n')
+    result = _eval(engine, "send_mail(a)")
+    assert result.decision is Decision.ASK and result.floor
+    assert result.approval.require == "passkey"
+    engine = _engine(tmp_path)  # no agent rule matches: fallback ask
+    result = _eval(engine, "send_mail(a)")
+    assert result.decision is Decision.ASK and result.floor
+    assert result.approval.require == "passkey"
+    assert engine.may_permit("send_mail")  # visibility follows the normal policy
     assert not engine.may_permit("wipe_all")
 
 
@@ -186,7 +209,16 @@ def test_rule_state_marks_allow_inactive_under_floor():
     now = "2026-01-01T00:00:00Z"
     assert rule_state(rule, registry, now_iso=now)[0] == "active"
     state = rule_state(rule, registry, now_iso=now, floor_for=lambda *_: True)
-    assert state[0] == "inactive" and "floor" in state[1]
+    assert state[0] == "inactive" and "covered by a floor rule" in state[1]
+    tool_rule = rule | {"scope": "tool", "signature": None}
+    seen = []
+    assert (
+        rule_state(tool_rule, registry, now_iso=now, floor_for=lambda *a: seen.append(a))[0]
+        == "active"
+    )
+    assert seen == [("bot", "send_mail", None)]  # tool scope asks "may a floor ask cover it?"
+    state = rule_state(tool_rule, registry, now_iso=now, floor_for=lambda *_: True)
+    assert state == ("inactive", "policy: covered by a floor rule")
     assert (
         rule_state(rule | {"action": "deny"}, registry, now_iso=now, floor_for=lambda *_: True)[0]
         == "active"

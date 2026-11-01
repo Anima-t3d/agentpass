@@ -129,14 +129,16 @@ def rule_state(
     now_iso: str,
     agent_known: Callable[[str], bool] = lambda _agent: True,
     approval_for: Callable[[str, str, str], ApprovalSpec | None] | None = None,
-    floor_for: Callable[[str, str, str], bool] | None = None,
+    floor_for: Callable[[str, str, str | None], bool] | None = None,
 ) -> tuple[str, str]:
     """(state, reason) of a stored rule: active | expired | revoked | inactive.
 
     *approval_for(agent, tool, signature)* gives the approval block of the rule that
     currently produces ``ask`` for an exact call, so a rule that now needs a passkey is
-    reported. *floor_for* says whether a floor ask rule covers that call (an allow is then
-    inactive). Tool-scope rules are judged on the tool alone.
+    reported. *floor_for(agent, tool, signature)* says whether a floor ask rule covers that call
+    (an allow is then inactive); for a tool-scope rule the signature is None and it says
+    whether a floor ask may cover some call of the tool. Otherwise tool-scope rules are
+    judged on the tool alone.
     """
     if rule["revoked_at"]:
         return "revoked", ""
@@ -152,12 +154,15 @@ def rule_state(
     if rule["tool_fingerprint"] != tool_fingerprint(tool):
         return "inactive", "tool changed"
     approval = None
-    floor = False
-    if rule["scope"] == "exact":
-        call = (rule["agent_id"], rule["tool_name"], rule["signature"] or "")
-        if approval_for is not None:
-            approval = approval_for(*call)
-        floor = floor_for is not None and floor_for(*call)
+    # exact: does a floor ask cover this call; tool scope: could it cover some call (None)
+    call = (
+        rule["agent_id"],
+        rule["tool_name"],
+        rule["signature"] if rule["scope"] == "exact" else None,
+    )
+    if approval_for is not None and rule["scope"] == "exact":
+        approval = approval_for(call[0], call[1], call[2] or "")
+    floor = floor_for is not None and floor_for(*call)
     blocker = allow_blocker(tool, approval, rule["scope"], floor)
     if blocker:
         return "inactive", f"policy: {blocker}"
@@ -198,7 +203,7 @@ class RememberedService:
         *,
         agent_known: Callable[[str], bool] = lambda _agent: True,
         approval_for: Callable[[str, str, str], ApprovalSpec | None] | None = None,
-        floor_for: Callable[[str, str, str], bool] | None = None,
+        floor_for: Callable[[str, str, str | None], bool] | None = None,
     ) -> None:
         self._db = db
         self._registry = registry
