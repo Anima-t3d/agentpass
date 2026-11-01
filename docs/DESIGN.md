@@ -336,7 +336,7 @@ args:
   labels:   { type: array, items: { type: string, validate: "[A-Za-z0-9_-]+" }, max_items: 10 }
 ```
 
-- Types: `string`, `text`, `integer`, `number`, `boolean`, `enum`, `array`, `object`. `description` and the type produce the MCP `inputSchema`.
+- Types: `string`, `text`, `integer`, `number`, `boolean`, `enum`, `array`, `object`. `description` and the type produce the MCP `inputSchema`. Array `items` may be any type except `array`; an `object` (also as an item) must be a mapping with string keys and is passed through as JSON.
 - `additionalArgs` is false by default: undeclared args are rejected, not forwarded. `validate` is a **fullmatch**.
 - Forbidden-character checks (`* ? [ ] ( ) ,` and control characters) apply to every string that appears in the **signature**, recursively. Free text (`type: text`, `signature: false`) is exempt, because mail and issue bodies legitimately contain such characters, and is never part of the signature. The approval message shows all args in full (long values truncated with the rest on the passkey page).
 - Path substitution percent-encodes every value as one path segment. `{name:path}` allows multiple segments with each segment checked against `.`/`..`/empty.

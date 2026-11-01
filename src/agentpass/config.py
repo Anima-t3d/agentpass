@@ -1065,8 +1065,8 @@ def _parse_arg(label: str, data: Any, *, nested: bool = False) -> ArgDefinition:
         if data.get("items") is None:
             raise ConfigError(f"{label}: array requires items")
         items = _parse_arg(f"{label}[]", data["items"], nested=True)
-        if items.type in ("array", "object"):
-            raise ConfigError(f"{label}: array items must be scalar")
+        if items.type == "array":
+            raise ConfigError(f"{label}: array items must be scalar or object, not arrays")
     elif data.get("items") is not None or data.get("max_items") is not None:
         raise ConfigError(f"{label}: items and max_items only apply to array args")
     signature = data.get("signature", True)

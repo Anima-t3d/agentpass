@@ -117,6 +117,25 @@ def test_bad_arg_definitions_rejected(tmp_path, arg, msg):
         _tools(tmp_path, f"tools:\n  t:\n    args:\n      a: {arg}\n")
 
 
+def test_array_of_objects(tmp_path):
+    reg, _ = _registry(
+        tmp_path,
+        """
+        tools:
+          t:
+            args:
+              people: { type: array, items: { type: object }, max_items: 2, signature: false }
+            request: { method: POST, path: /x }
+        """,
+    )
+    validate_args("t", {"people": [{"email": "a@example.com"}]}, reg)
+    for bad in (["a@example.com"], [{"a": 1}, {"b": 2}, {"c": 3}], {"email": "a@example.com"}):
+        with pytest.raises(ValueError):
+            validate_args("t", {"people": bad}, reg)
+    props = args_to_json_schema(reg.get_tool("t").args)["properties"]
+    assert props["people"]["items"]["type"] == "object"
+
+
 @pytest.mark.parametrize(
     "body, msg",
     [
