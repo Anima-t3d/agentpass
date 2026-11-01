@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import stat
+from collections.abc import Callable
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -47,6 +48,7 @@ class Fake:
         self.counter = 0
         self.grant_scope = "https://www.googleapis.com/auth/gmail.modify"
         self.server: TestServer | None = None
+        self.after_token: Callable[[], None] | None = None  # runs once the answer is built
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -65,6 +67,8 @@ class Fake:
         self.counter += 1
         access = f"access-{self.counter}-{secrets.token_hex(4)}"
         self.valid_access.add(access)
+        if self.after_token:
+            self.after_token()
         return web.json_response(
             {
                 "access_token": access,
@@ -615,3 +619,112 @@ def test_calendar_list_events_validation():
     assert not ok.fullmatch("tomorrow")
     assert not ok.fullmatch("2026-10-27")
     assert tools["calendar_list_events"].args["time_min"].required
+
+
+# --- running gateway vs. `agentpass auth` writing the file ---
+
+_CALENDAR = "https://www.googleapis.com/auth/calendar"
+
+
+def _external_consent(store, *, scopes, access="new-access", expires_in=3600.0) -> StoredToken:
+    """What `agentpass auth` leaves behind: a new refresh token with wider scopes."""
+    import time
+
+    now = time.time()
+    t = StoredToken(
+        refresh_token="consented-" + secrets.token_hex(8),
+        access_token=access,
+        expires_at=now + expires_in,
+        scopes=scopes,
+        obtained_at=now,
+    )
+    store.save("google", "personal", t)
+    return t
+
+
+async def test_external_consent_is_used_by_next_header_and_not_overwritten(
+    fake, store, secrets_file
+):
+    import time
+
+    now = time.time()
+    store.save("google", "personal", _token(now, expires_in=3600))
+    p = _provider(fake, store, secrets_file)
+    assert (await p.header())["Authorization"] == "Bearer old-access"
+    new = _external_consent(store, scopes=["gmail.modify", _CALENDAR])
+    assert (await p.header())["Authorization"] == "Bearer new-access"
+    assert fake.token_calls == []
+    assert store.load("google", "personal").refresh_token == new.refresh_token
+    # once the access token expires, the refresh uses the new refresh token
+    p._clock = lambda: now + 7200
+    await p.header()
+    assert fake.token_calls[-1]["refresh_token"] == new.refresh_token
+
+
+async def test_refresh_racing_with_external_write_keeps_the_file(fake, store, secrets_file):
+    import time
+
+    store.save("google", "personal", _token(time.time(), expires_in=0))
+    p = _provider(fake, store, secrets_file)
+    written: list[StoredToken] = []
+
+    def owner_consents() -> None:  # the old refresh token already got an old-scope answer
+        written.append(_external_consent(store, scopes=["gmail.modify", _CALENDAR]))
+
+    fake.after_token = owner_consents
+    header = await p.header()
+    assert header["Authorization"] == "Bearer new-access"
+    saved = store.load("google", "personal")
+    assert saved.refresh_token == written[0].refresh_token
+    assert saved.scopes == ["gmail.modify", _CALENDAR]
+    assert saved.access_token == "new-access"
+
+
+async def test_needs_consent_cleared_when_new_consent_file_appears(fake, store, secrets_file):
+    import time
+
+    t = _token(time.time(), expires_in=0)
+    t.needs_consent = True
+    store.save("google", "personal", t)
+    texts: list[str] = []
+
+    async def notifier(text: str) -> None:
+        texts.append(text)
+
+    p = _provider(fake, store, secrets_file)
+    p.set_notifier(notifier)
+    await asyncio.sleep(0)
+    assert p.needs_consent is True
+    assert len(texts) == 1
+    _external_consent(store, scopes=["gmail.modify"])
+    assert p.needs_consent is False
+    assert (await p.header())["Authorization"] == "Bearer new-access"
+    # the next invalid_grant may notify again
+    assert p._notified is False
+
+
+async def test_missing_file_at_reload_keeps_last_good_token(fake, store, secrets_file, caplog):
+    import time
+
+    store.save("google", "personal", _token(time.time(), expires_in=3600))
+    p = _provider(fake, store, secrets_file)
+    assert (await p.header())["Authorization"] == "Bearer old-access"
+    store.delete("google", "personal")
+    with caplog.at_level("WARNING"):
+        assert (await p.header())["Authorization"] == "Bearer old-access"
+        assert p.needs_consent is False
+    assert "keeping the last good token" in caplog.text
+    assert "old-access" not in caplog.text
+
+
+async def test_unreadable_file_at_reload_keeps_last_good_token(fake, store, secrets_file, caplog):
+    import time
+
+    t = _token(time.time(), expires_in=3600)
+    store.save("google", "personal", t)
+    p = _provider(fake, store, secrets_file)
+    await p.header()
+    store.path("google", "personal").write_text("{not json")
+    with caplog.at_level("WARNING"):
+        assert (await p.header())["Authorization"] == "Bearer old-access"
+    assert t.refresh_token not in caplog.text

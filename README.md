@@ -423,6 +423,8 @@ agentpass auth revoke --account personal
 
 The auth CLI resolves the token directory exactly as the gateway does and refuses to start the consent flow if it cannot write there. When consent is missing or expired, tool calls fail with a generic "needs operator action" error and the operator is notified once.
 
+**Incremental consent while the gateway runs.** You can run `agentpass auth google --account NAME --scopes ...` against a live gateway to add scopes or to renew a lapsed consent; no restart is needed. The gateway compares a cheap stamp of the token file (mtime, inode, size) on every use and reloads it when it changed, which also clears an in-memory `needs_consent` and re-arms the owner notification. A refresh that was already in flight when the file changed is discarded, so a stale refresh token can never overwrite the new consent. A missing or unreadable file at reload time keeps the last good in-memory token and logs a warning (never token values).
+
 ### Remembered decisions
 
 "Allow always" / "Deny always" buttons store a revocable rule in the database. Eligibility depends on the tool's `risk` and `remember` keys (see Tool Definition YAML below). List and revoke rules with `agentpass remembered list|revoke` or on the dashboard's remembered-rules page; details are in [docs/REMEMBERED-DECISIONS.md](docs/REMEMBERED-DECISIONS.md).

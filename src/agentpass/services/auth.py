@@ -197,12 +197,13 @@ class OAuth2Refresh(TokenProvider):
         self._lock = asyncio.Lock()
         self._token: StoredToken | None = None
         self._loaded = False
+        self._stamp: tuple[int, int, int] | None = None  # file stamp at last load or save
         self._notifier: Notifier | None = None
         self._notified = False
 
     @property
     def needs_consent(self) -> bool:
-        self._ensure_loaded()
+        self._sync()
         return self._token is None or self._token.needs_consent
 
     def consent_command(self) -> str:
@@ -213,28 +214,77 @@ class OAuth2Refresh(TokenProvider):
         cmd = f"agentpass auth {self._provider} --account {self._account}"
         return f"{cmd} --scopes {scopes}" if scopes else cmd
 
-    def _ensure_loaded(self) -> None:
-        if not self._loaded:
-            self._token = self._store.load(self._provider, self._account)
-            self._loaded = True
+    def _file_stamp(self) -> tuple[int, int, int] | None:
+        """Cheap change detector for the token file; None if it cannot be stat'ed."""
+        try:
+            st = os.stat(self._store.path(self._provider, self._account))
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_ino, st.st_size)
+
+    def _sync(self) -> bool:
+        """(Re)load the token file if it changed since we last loaded or saved it.
+
+        ``agentpass auth`` runs in another process and writes the file while the
+        gateway keeps running. Returns True if the file changed. A missing or
+        unreadable file keeps the last good in-memory token.
+        """
+        stamp = self._file_stamp()
+        if self._loaded and stamp == self._stamp:
+            return False
+        first = not self._loaded
+        self._loaded = True
+        self._stamp = stamp  # taken before the read: a racing write just reloads next time
+        try:
+            loaded = self._store.load(self._provider, self._account)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            logger.warning(
+                "Cannot reload %s token for account '%s' (%s); keeping the last good token",
+                self._provider,
+                self._account,
+                type(e).__name__,
+            )
+            return not first
+        if loaded is None:
+            if self._token is not None:
+                logger.warning(
+                    "%s token file for account '%s' is missing; keeping the last good token",
+                    self._provider,
+                    self._account,
+                )
+            return not first
+        self._token = loaded
+        if not loaded.needs_consent:
+            self._notified = False  # a later invalid_grant may notify the owner again
+        return not first
+
+    def _save(self) -> None:
+        assert self._token is not None
+        self._store.save(self._provider, self._account, self._token)
+        self._stamp = self._file_stamp()
 
     def _fresh(self) -> bool:
         t = self._token
         return bool(t and t.access_token and t.expires_at - self._clock() >= REFRESH_MARGIN)
 
     async def header(self) -> dict[str, str]:
-        self._ensure_loaded()
-        if self.needs_consent:
+        if self.needs_consent:  # also syncs with the file
             raise ServiceUnauthorizedError(self._account)
         if not self._fresh():
             async with self._lock:
-                if not self._fresh():  # single flight: the first waiter refreshes
+                # Single flight: the first waiter refreshes. A refresh that is discarded
+                # because the file changed is retried once with the reloaded token.
+                for _ in range(2):
+                    self._sync()
+                    if self._token is None or self._token.needs_consent:
+                        raise ServiceUnauthorizedError(self._account)
+                    if self._fresh():
+                        break
                     await self._refresh()
         assert self._token is not None
         return {"Authorization": f"Bearer {self._token.access_token}"}
 
     async def on_unauthorized(self, used: dict[str, str]) -> bool:
-        self._ensure_loaded()
         async with self._lock:
             if self.needs_consent:
                 return False
@@ -245,8 +295,10 @@ class OAuth2Refresh(TokenProvider):
             return True
 
     async def _refresh(self) -> None:
-        """Caller holds the lock."""
-        assert self._token is not None
+        """Caller holds the lock. Never saves over a file that changed meanwhile."""
+        self._sync()
+        if self._token is None or self._token.needs_consent:
+            raise ServiceUnauthorizedError(self._account)
         client_id, client_secret = load_client_secrets(self._secrets_file, self._provider)
         form = {
             "grant_type": "refresh_token",
@@ -269,6 +321,10 @@ class OAuth2Refresh(TokenProvider):
         except (aiohttp.ClientError, TimeoutError) as e:
             raise TokenRefreshError(type(e).__name__) from None
 
+        if self._sync():
+            # The owner wrote a new token while the request was in flight: the file
+            # wins and this result (made from the old refresh token) is discarded.
+            return
         if status == 400 and isinstance(data, dict) and data.get("error") == "invalid_grant":
             await self._mark_needs_consent()
             raise ServiceUnauthorizedError(self._account)
@@ -282,19 +338,19 @@ class OAuth2Refresh(TokenProvider):
         t.refresh_token = data.get("refresh_token", t.refresh_token)  # refresh tokens rotate
         if data.get("scope"):
             t.scopes = data["scope"].split()
-        self._store.save(self._provider, self._account, t)
+        self._save()
 
     async def _mark_needs_consent(self) -> None:
         assert self._token is not None
         self._token.needs_consent = True
         self._token.access_token = ""
-        self._store.save(self._provider, self._account, self._token)
+        self._save()
         await self._notify()
 
     def set_notifier(self, notifier: Notifier) -> None:
         """Wire the owner notification; sends one now if consent is already needed."""
         self._notifier = notifier
-        self._ensure_loaded()
+        self._sync()
         if self._token is not None and self._token.needs_consent:
             asyncio.get_running_loop().create_task(self._notify())
 

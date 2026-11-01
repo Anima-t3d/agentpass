@@ -182,6 +182,7 @@ async def run_google_consent(
     print_fn("Granted scopes:")
     for s in token.scopes:
         print_fn(f"  {s}")
+    print_fn("A running gateway picks up the new token automatically; no restart needed.")
     return token
 
 
