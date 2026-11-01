@@ -74,6 +74,29 @@ def test_calendar_pins_send_updates_and_takes_attendees():
     assert "sendUpdates" not in create.args and "attendees" in create.args
 
 
+def test_calendar_event_times_and_attendees_are_objects():
+    tools = load_tools_file("tools/calendar.yaml", "calendar")
+    reg = ToolRegistry({t.name: t for t in tools})
+    args = {
+        "calendar_id": "primary",
+        "summary": "Standup",
+        "start": {"dateTime": "2026-11-03T14:00:00+01:00"},
+        "end": {"dateTime": "2026-11-03T14:30:00+01:00"},
+        "attendees": [{"email": "bob@example.com"}],
+    }
+    validate_args("calendar_create_event", args, reg)
+    for bad in (
+        {"start": "2026-11-03T14:00:00+01:00"},
+        {"end": '{"dateTime": "2026-11-03T14:30:00+01:00"}'},
+        {"attendees": ["bob@example.com"]},
+    ):
+        try:
+            validate_args("calendar_create_event", args | bad, reg)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {bad}")
+
+
 def test_writes_to_main_and_master_are_denied_unless_a_rule_allows(tmp_path):
     engine = _engine(tmp_path)
     put = {"owner": "me", "repo": "notes", "path": "a.md", "message": "m", "content": b64("x")}

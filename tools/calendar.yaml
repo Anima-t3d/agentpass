@@ -63,9 +63,14 @@ tools:
         validate: "[^\\x00-\\x1f]{1,200}"
       start:
         required: true
+        type: object
       end:
         required: true
+        type: object
       attendees:
+        type: array
+        items: { type: object }
+        max_items: 50
         signature: false
         description: "Invitees as Calendar API objects, e.g. [{email: ...}]"
       location: { type: string, max_length: 500, signature: false }
