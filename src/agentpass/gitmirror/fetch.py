@@ -34,7 +34,7 @@ def github_url(req: FetchRequest) -> str:
 class FetchSettings:
     token: str
     home: Path
-    timeout_s: float = 600
+    timeout_s: float = 600  # total budget for all git calls of one fetch
     max_bytes: int = 2147483648
     remote_url: Callable[[FetchRequest], str] = github_url
     allowed_protocols: tuple[str, ...] = ("https",)
@@ -112,9 +112,11 @@ def _journal(what: str, proc: subprocess.CompletedProcess, settings: FetchSettin
     print(f"agentgit: git {what} failed (exit {proc.returncode}): {stderr}", file=sys.stderr)
 
 
-def _git(
-    settings: FetchSettings, *args: str, timeout: float | None = None
-) -> subprocess.CompletedProcess:
+def _git(settings: FetchSettings, deadline: float, *args: str) -> subprocess.CompletedProcess:
+    """Run one git child with whatever is left of the fetch's total budget."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise HelperError("timeout")
     try:
         return settings.run(
             ["git", *args],
@@ -125,15 +127,17 @@ def _git(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=settings.timeout_s if timeout is None else timeout,
+            timeout=remaining,
             check=False,
         )
     except subprocess.TimeoutExpired:
         raise HelperError("timeout") from None
 
 
-def _git_ok(settings: FetchSettings, what: str, *args: str) -> subprocess.CompletedProcess:
-    proc = _git(settings, *args)
+def _git_ok(
+    settings: FetchSettings, deadline: float, what: str, *args: str
+) -> subprocess.CompletedProcess:
+    proc = _git(settings, deadline, *args)
     if proc.returncode != 0:
         _journal(what, proc, settings)
         raise HelperError("internal")
@@ -183,18 +187,20 @@ def fetch(req: FetchRequest, repo: Path, settings: FetchSettings) -> dict:
 
 def _fetch_locked(req: FetchRequest, repo: Path, settings: FetchSettings, started: float) -> dict:
     trusted = settings.trusted_uids
+    deadline = started + settings.timeout_s
     check_path_safe(repo.parent, trusted)
     check_path_safe(settings.home, trusted)
     if os.path.lexists(repo):
         check_path_safe(repo, trusted)
         check_path_safe(repo / "config", trusted)
     else:
-        _git_ok(settings, "init", "init", "--bare", "--quiet", "--", str(repo))
+        _git_ok(settings, deadline, "init", "init", "--bare", "--quiet", "--", str(repo))
 
     before = _size(repo)
     branch_ref = f"refs/heads/{req.branch}"
     proc = _git(
         settings,
+        deadline,
         "-C",
         str(repo),
         "fetch",
@@ -210,19 +216,21 @@ def _fetch_locked(req: FetchRequest, repo: Path, settings: FetchSettings, starte
         _journal("fetch", proc, settings)
         raise HelperError(_classify(proc.stderr or ""))
 
-    got = _git_ok(settings, "rev-parse", "-C", str(repo), "rev-parse", "--verify", INCOMING)
+    got = _git_ok(
+        settings, deadline, "rev-parse", "-C", str(repo), "rev-parse", "--verify", INCOMING
+    )
     if got.stdout.strip() != req.sha:
-        _git_ok(settings, "update-ref", "-C", str(repo), "update-ref", "-d", INCOMING)
+        _git_ok(settings, deadline, "update-ref", "-C", str(repo), "update-ref", "-d", INCOMING)
         raise HelperError("branch_moved")
 
     after = _size(repo)
     if after > settings.max_bytes:
-        _git_ok(settings, "update-ref", "-C", str(repo), "update-ref", "-d", INCOMING)
-        _git_ok(settings, "gc", "-C", str(repo), "gc", "--prune=now", "--quiet")
+        _git_ok(settings, deadline, "update-ref", "-C", str(repo), "update-ref", "-d", INCOMING)
+        _git_ok(settings, deadline, "gc", "-C", str(repo), "gc", "--prune=now", "--quiet")
         raise HelperError("too_large")
 
-    _git_ok(settings, "update-ref", "-C", str(repo), "update-ref", branch_ref, req.sha)
-    _git_ok(settings, "update-ref", "-C", str(repo), "update-ref", "-d", INCOMING)
+    _git_ok(settings, deadline, "update-ref", "-C", str(repo), "update-ref", branch_ref, req.sha)
+    _git_ok(settings, deadline, "update-ref", "-C", str(repo), "update-ref", "-d", INCOMING)
     return {
         "mirror_path": str(repo),
         "ref": branch_ref,

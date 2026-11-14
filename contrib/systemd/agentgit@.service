@@ -16,6 +16,8 @@ Description=AgentPass git mirror helper (one connection)
 
 [Service]
 Type=simple
+# a failed instance (one per connection) is garbage-collected, not left in systemctl --failed
+CollectMode=inactive-or-failed
 User=agentgit
 Group=agentgit
 SupplementaryGroups=agentgit-readers
@@ -26,6 +28,9 @@ ExecStart=/opt/agentpass/venv/bin/python -I -m agentpass.gitmirror.helper
 LoadCredential=github-token:/etc/agentgit/token
 StateDirectory=agentgit
 UMask=0027
+# Fetch budget (all git calls of one fetch) < RuntimeMaxSec < the plugin's
+# FETCH_TIMEOUT_S (690 s, agentpass/gitmirror/plugin.py). Raise them together.
+Environment=AGENTGIT_FETCH_TIMEOUT_S=600
 RuntimeMaxSec=660
 MemoryMax=1G
 

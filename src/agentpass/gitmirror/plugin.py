@@ -16,7 +16,9 @@ from agentpass.executor import ExecutionError
 from agentpass.services.base import ServiceHandler
 
 FETCH_TOOL = "gh_mirror_fetch"
-FETCH_TIMEOUT_S = 660.0  # helper fetch timeout (600 s) plus slack
+# Nested timeouts: helper budget AGENTGIT_FETCH_TIMEOUT_S (600) < RuntimeMaxSec of
+# agentgit@.service (660) < this (690). Raising one means raising the ones after it.
+FETCH_TIMEOUT_S = 690.0
 HEALTH_TIMEOUT_S = 5.0
 MAX_REPLY = 1024 * 1024
 _FIELDS = ("owner", "repo", "branch", "sha")

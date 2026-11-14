@@ -230,7 +230,7 @@ async def test_execute_deadline_is_internal(sock: Path, monkeypatch: pytest.Monk
 
 
 def test_fetch_timeout_default() -> None:
-    assert plugin_mod.FETCH_TIMEOUT_S == 660
+    assert plugin_mod.FETCH_TIMEOUT_S == 690
 
 
 async def test_execute_other_tool_is_value_error(sock: Path) -> None:

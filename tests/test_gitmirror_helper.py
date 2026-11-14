@@ -191,6 +191,45 @@ def test_lookup_relation_checks_not_configured(env):
     assert res == {"ok": False, "error": "not_configured"}
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, 600.0),
+        ("600", 600.0),
+        ("120", 120.0),
+        ("90.5", 90.5),
+        ("", 600.0),
+        ("abc", 600.0),
+        ("0", 600.0),
+        ("-5", 600.0),
+        ("inf", 600.0),
+        ("nan", 600.0),
+    ],
+)
+def test_fetch_timeout_from_env(raw, expected):
+    environ = {} if raw is None else {"AGENTGIT_FETCH_TIMEOUT_S": raw}
+    assert helper.fetch_timeout(environ) == expected
+
+
+def test_main_applies_env_timeout(monkeypatch):
+    seen = {}
+
+    def fake_serve(stdin, stdout, settings, allowlist, root, **kw):
+        seen["settings"] = settings
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setenv("AGENTGIT_FETCH_TIMEOUT_S", "123")
+    monkeypatch.setattr(helper, "serve", fake_serve)
+    monkeypatch.setattr(helper.os, "_exit", fake_exit)
+    monkeypatch.setattr(helper.os, "umask", lambda m: 0o022)
+    with pytest.raises(SystemExit) as e:
+        helper.main()
+    assert e.value.code == 0
+    assert seen["settings"].timeout_s == 123.0
+
+
 def test_load_token(tmp_path, monkeypatch):
     monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
     assert helper.load_token() == ""
@@ -269,3 +308,25 @@ def test_socket_oversize(env):
         client.sendall(b"a" * 5000)
         _serve_on_socket(env, server, read_timeout_s=5)
         assert json.loads(client.recv(1000))["error"] == "invalid_request"
+
+
+def test_main_exits_zero_when_peer_is_gone(tmp_path):
+    """A closed peer makes the reply write fail with EPIPE; the process must still exit 0
+    (the final interpreter flush would otherwise fail and exit 120: a failed unit)."""
+    import socket
+    import sys
+
+    client, server = socket.socketpair()
+    client.close()
+    with server:
+        proc = subprocess.run(
+            [sys.executable, "-I", "-m", "agentpass.gitmirror.helper"],
+            stdin=server.fileno(),
+            stdout=server.fileno(),
+            stderr=subprocess.PIPE,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+            timeout=30,
+            check=False,
+        )
+    assert proc.returncode == 0, proc.stderr
+    assert b"BrokenPipeError" not in proc.stderr

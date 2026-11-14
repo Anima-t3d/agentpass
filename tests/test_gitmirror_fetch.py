@@ -261,7 +261,7 @@ def _fail(stderr: str, rc: int = 128) -> subprocess.CompletedProcess:
 def test_timeout_maps_to_timeout(upstream, repo, settings) -> None:
     def run(argv, **kw):
         if "fetch" in argv:
-            assert kw["timeout"] == settings.timeout_s
+            assert 0 < kw["timeout"] <= settings.timeout_s
             raise subprocess.TimeoutExpired(argv, kw["timeout"])
         return subprocess.run(argv, **kw)
 
@@ -269,6 +269,35 @@ def test_timeout_maps_to_timeout(upstream, repo, settings) -> None:
         fetch(req_for(upstream), repo, replace(settings, run=run))
     assert e.value.code == "timeout"
     assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def test_one_total_budget_across_git_calls(upstream, repo, settings, monkeypatch) -> None:
+    """Each git call gets only what is left of timeout_s; an exhausted budget is timeout."""
+    import agentpass.gitmirror.fetch as fetch_mod
+
+    clock = FakeClock()
+    monkeypatch.setattr(fetch_mod, "time", clock)
+    timeouts: list[float] = []
+
+    def run(argv, **kw):
+        timeouts.append(kw["timeout"])
+        out = subprocess.run(argv, **kw)
+        clock.now += 40  # every git call takes 40 s of the 100 s budget
+        return out
+
+    with pytest.raises(HelperError) as e:
+        fetch(req_for(upstream), repo, replace(settings, timeout_s=100, run=run))
+    assert e.value.code == "timeout"
+    assert timeouts == [100, 60, 20]  # init, fetch, rev-parse; update-ref has no budget left
+    assert ref(repo, "refs/heads/main") is None
 
 
 @pytest.mark.parametrize(

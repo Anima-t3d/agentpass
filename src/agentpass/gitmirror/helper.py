@@ -8,11 +8,13 @@ token scrubbed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import select
 import sys
 import time
 import traceback
+from collections.abc import Mapping
 from pathlib import Path
 from typing import BinaryIO
 
@@ -31,6 +33,10 @@ READ_TIMEOUT_S = 10.0
 HOME = Path("/var/lib/agentgit")
 ALLOWLIST = Path("/etc/agentgit/repos")
 MIRROR_ROOT = Path("/srv/git-mirror")
+# Total git budget of one fetch. Nested timeouts: this (Environment= in agentgit@.service)
+# < RuntimeMaxSec there (660) < the plugin's FETCH_TIMEOUT_S (690).
+FETCH_TIMEOUT_ENV = "AGENTGIT_FETCH_TIMEOUT_S"
+DEFAULT_FETCH_TIMEOUT_S = 600.0
 
 
 def _read_line(stdin: BinaryIO, timeout_s: float) -> bytes:
@@ -133,11 +139,24 @@ def load_token() -> str:
         return ""
 
 
+def fetch_timeout(environ: Mapping[str, str]) -> float:
+    """The fetch budget from the environment; anything but a finite positive number is
+    the default."""
+    try:
+        value = float(environ.get(FETCH_TIMEOUT_ENV, ""))
+    except ValueError:
+        return DEFAULT_FETCH_TIMEOUT_S
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_FETCH_TIMEOUT_S
+    return value
+
+
 def main() -> None:
     os.umask(0o027)
     settings = FetchSettings(
         token=load_token(),
         home=HOME,
+        timeout_s=fetch_timeout(os.environ),
         trusted_uids=frozenset({0, os.getuid()}),
     )
     serve(
@@ -147,6 +166,11 @@ def main() -> None:
         ALLOWLIST,
         MIRROR_ROOT,
     )
+    # serve already wrote the reply or found the peer gone. Exit here: after a broken
+    # pipe the interpreter's own final stdout flush would fail again and exit 120,
+    # leaving a failed unit instance behind.
+    sys.stderr.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":

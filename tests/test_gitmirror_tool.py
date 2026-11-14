@@ -264,6 +264,8 @@ def test_service_unit():
         "StateDirectory": "agentgit",
         "UMask": "0027",
         "RuntimeMaxSec": "660",
+        "Environment": "AGENTGIT_FETCH_TIMEOUT_S=600",
+        "CollectMode": "inactive-or-failed",
         "MemoryMax": "1G",
         "ProtectSystem": "strict",
         "ReadWritePaths": "/srv/git-mirror",
@@ -276,3 +278,18 @@ def test_service_unit():
     }
     for key, value in expected.items():
         assert u.get(key) == [value], key
+
+
+def test_timeouts_are_nested():
+    """helper budget < RuntimeMaxSec < plugin deadline: systemd stops a stuck helper
+    before the gateway gives up, and the helper reports timeout before systemd kills it."""
+    from agentpass.gitmirror.helper import DEFAULT_FETCH_TIMEOUT_S
+    from agentpass.gitmirror.plugin import FETCH_TIMEOUT_S
+
+    u = _unit("agentgit@.service")
+    env = dict(e.split("=", 1) for e in u["Environment"])
+    budget = float(env["AGENTGIT_FETCH_TIMEOUT_S"])
+    runtime_max = float(u["RuntimeMaxSec"][0])
+    assert budget == DEFAULT_FETCH_TIMEOUT_S == 600
+    assert budget < runtime_max < FETCH_TIMEOUT_S
+
