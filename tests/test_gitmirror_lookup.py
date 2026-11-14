@@ -176,14 +176,19 @@ def test_rewritten(tmp_path: Path, status: str) -> None:
     }
 
 
-def test_compare_raises_is_unknown(tmp_path: Path) -> None:
-    out, _, _ = relation(tmp_path, HelperError("internal"))
-    assert out == UNKNOWN
+def test_compare_raises_is_unknown_with_previous(tmp_path: Path) -> None:
+    out, prev, _ = relation(tmp_path, HelperError("internal"))
+    assert out == UNKNOWN | {"previous": prev}  # the mirror ref was read: show it
 
 
-def test_compare_odd_status_is_unknown(tmp_path: Path) -> None:
-    out, _, _ = relation(tmp_path, {"status": "identical", "ahead_by": 0, "behind_by": 0})
-    assert out == UNKNOWN
+def test_compare_odd_status_is_unknown_with_previous(tmp_path: Path) -> None:
+    out, prev, _ = relation(tmp_path, {"status": "identical", "ahead_by": 0, "behind_by": 0})
+    assert out == UNKNOWN | {"previous": prev}
+
+
+def test_compare_malformed_is_unknown_with_previous(tmp_path: Path) -> None:
+    out, prev, _ = relation(tmp_path, {"status": "ahead"})
+    assert out == UNKNOWN | {"previous": prev}
 
 
 def test_rev_parse_failure_is_unknown(tmp_path: Path) -> None:

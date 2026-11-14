@@ -75,7 +75,7 @@ def test_tool_definition():
     assert "gh_get_branch" in tool.description
     assert [(lk.id, lk.path, lk.on_error, lk.timeout) for lk in tool.preview.lookups] == [
         ("commit", "/commit", "unavailable", 5.0),
-        ("relation", "/relation", "omit", 5.0),
+        ("relation", "/relation", "unavailable", 5.0),
     ]
 
 
@@ -203,14 +203,20 @@ async def test_preview_not_tip_warns():
     assert p.warnings == [W_NOT_TIP]
 
 
-async def test_preview_relation_failing_is_omitted():
-    p = await _preview(_routes(relation=LookupError("internal")))
+async def test_preview_relation_failing_is_unavailable():
+    """A helper or transport failure never hides the history check: no preview at all."""
+    result = await build_any(
+        "git_mirror", "git_mirror", TOOL, ARGS, _routes(relation=LookupError("internal"))
+    )
+    assert isinstance(result, Unavailable)
+
+
+async def test_preview_unknown_relation_shows_known_previous():
+    p = await _preview(_routes(relation=UNKNOWN | {"previous": PREV}))
     fields = _fields(p)
-    assert W_UNKNOWN not in p.warnings and p.warnings == []
-    assert fields["Commit"] == SHA
-    assert fields["Headline"] == "Fix the login form"
-    assert fields["Author"] == "Ada"
-    assert "History" not in fields and "Previous" not in fields
+    assert fields["Previous"] == PREV
+    assert fields["History"] == "history check unavailable"
+    assert p.warnings == [W_UNKNOWN]
 
 
 async def test_preview_commit_failing_is_unavailable():

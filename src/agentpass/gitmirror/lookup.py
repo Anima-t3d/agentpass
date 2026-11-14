@@ -21,7 +21,7 @@ _TIMEOUT_S = 4
 _MAX_BODY = 1024 * 1024
 _HEADLINE_MAX = 200
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
-_UNKNOWN = {"state": "unknown", "previous": None, "summary": "history check unavailable"}
+_UNKNOWN_SUMMARY = "history check unavailable"
 
 
 class GitHubApi(Protocol):
@@ -122,6 +122,9 @@ def _mirror_sha(req: FetchRequest, repo: Path, settings: FetchSettings) -> str |
 
 
 def lookup_relation(req: FetchRequest, repo: Path, api: GitHubApi, settings: FetchSettings) -> dict:
+    """How ``req.sha`` relates to the mirror's branch. Any failure is state ``unknown``
+    (never an error), keeping ``previous`` when the mirror ref was read."""
+    previous = None
     try:
         previous = _mirror_sha(req, repo, settings)
         if previous is None:
@@ -144,4 +147,4 @@ def lookup_relation(req: FetchRequest, repo: Path, api: GitHubApi, settings: Fet
             }
     except Exception:
         pass
-    return dict(_UNKNOWN)
+    return {"state": "unknown", "previous": previous, "summary": _UNKNOWN_SUMMARY}

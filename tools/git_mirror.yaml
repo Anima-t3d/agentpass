@@ -35,7 +35,7 @@ tools:
     preview:
       lookups:
         - { id: commit, path: "/commit", on_error: unavailable, timeout: 5 }
-        - { id: relation, path: "/relation", on_error: omit, timeout: 5 }
+        - { id: relation, path: "/relation", on_error: unavailable, timeout: 5 }
       title: "Update mirror of {owner}/{repo} ({branch})"
       summary: "Update mirror of {owner}/{repo} ({branch}) to {sha}: {commit.headline}"
       fields:

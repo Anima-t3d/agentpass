@@ -207,7 +207,7 @@ Template renderer. The lookups are not HTTP paths: the plugin answers `/commit` 
 preview:
   lookups:
     - { id: commit, path: "/commit", on_error: unavailable, timeout: 5 }
-    - { id: relation, path: "/relation", on_error: omit, timeout: 5 }
+    - { id: relation, path: "/relation", on_error: unavailable, timeout: 5 }
   title: "Update mirror of {owner}/{repo} ({branch})"
   fields:
     - { label: "Commit", value: "{sha}" }
@@ -220,8 +220,8 @@ preview:
 ```
 
 - `commit` (required, `on_error: unavailable`): `headline` (first line of the message), `author`, `date` (committer date, shown in the display zone), `is_tip` (`yes`/`no`: whether `sha` is still the branch tip on GitHub). Without it the preview is "Preview unavailable": the operator must not approve a commit they cannot see.
-- `relation` (`on_error: omit`): how `sha` relates to what the mirror has for that branch now. `state` is one of `new` (first fetch of this branch), `same` (already at this commit), `fast-forward` ("N new commits"), `rewritten` ("history rewritten: X commits dropped, Y new", from the compare API) or `unknown` ("history check unavailable"); `previous` is the mirror's current sha (absent for `new`); `summary` is the line shown under History.
-- Warnings: `rewritten` gets the prominent warning above (rewritten history is allowed, but never silently); `unknown` gets "History check unavailable: cannot confirm this is a fast-forward", so a failed check is never read as a fast-forward; `is_tip: no` gets "This commit is no longer the branch tip". If the `relation` lookup fails outright, its fields are left out and no relation warning is shown; the commit fields still render.
+- `relation` (required, `on_error: unavailable`): how `sha` relates to what the mirror has for that branch now. `state` is one of `new` (first fetch of this branch), `same` (already at this commit), `fast-forward` ("N new commits"), `rewritten` ("history rewritten: X commits dropped, Y new", from the compare API) or `unknown` ("history check unavailable"); `previous` is the mirror's current sha (absent for `new`, and for `unknown` when the mirror ref itself could not be read; kept for `unknown` when the ref was read but the compare failed); `summary` is the line shown under History.
+- Warnings: `rewritten` gets the prominent warning above (rewritten history is allowed, but never silently); `unknown` gets "History check unavailable: cannot confirm this is a fast-forward", so a failed check is never read as a fast-forward; `is_tip: no` gets "This commit is no longer the branch tip". A failed history check inside the helper is reported as `unknown` (with its warning), never as an error. If the `relation` lookup itself fails (helper down, transport or protocol error), the preview is "Preview unavailable", like a failed `commit` lookup: a failure never hides the history check.
 - Snapshot limits (section 7): the commit details are bound to the signed sha and cannot change. `is_tip` and the history relation can change before execution; a branch that moves is caught by the sha check at fetch time.
 
 ## 5. Agent-supplied context (`agent_note`)
