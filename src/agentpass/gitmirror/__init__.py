@@ -1,0 +1,1 @@
+"""Privileged git mirror helper."""
