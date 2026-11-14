@@ -764,3 +764,92 @@ class TestSchemaV2:
         assert (await db.get_idempotency("alice", "k"))["tool_name"] == "t"
         assert await db.get_pending("r1") is not None
         await db.close()
+
+
+class TestPolledExecutionErrors:
+    """A polled result keeps a handler's public fixed message; anything else stays generic."""
+
+    async def _polled_error(self, env) -> dict:
+        first = await _ask(env)
+        assert first["status"] == "pending_approval"
+        rid = first["request_id"]
+        await env.answer("allow")
+        res = (await call(env, "gateway_result", {"request_id": rid, "wait_seconds": 5}))[
+            "structuredContent"
+        ]
+        assert res["status"] == "error" and res["request_id"] == rid
+        return res["error"]
+
+    async def test_public_message_survives_gateway_result(self, env):
+        from agentpass.executor import ExecutionError
+
+        env.service.fail = ExecutionError("fixed public message", public=True)
+        err = await self._polled_error(env)
+        assert err["code"] == "execution_failed"
+        assert err["message"] == "fixed public message"
+
+    async def test_ordinary_execution_error_stays_generic(self, env):
+        from agentpass.executor import ExecutionError
+
+        env.service.fail = ExecutionError("upstream detail token=abc123")
+        err = await self._polled_error(env)
+        assert err == {
+            "code": "execution_failed",
+            "message": "Execution failed",
+            "request_id": err["request_id"],
+        }
+
+    async def test_git_mirror_branch_moved_via_gateway_result(self, env, tmp_path):
+        from agentpass.gitmirror.plugin import MESSAGES, GitMirrorService
+        from tests.test_gitmirror_plugin import FakeHelper, _cfg, _reply
+
+        sock = tmp_path / "h.sock"
+        mirror = GitMirrorService(_cfg(f"unix://{sock}"), [])
+        args = {"owner": "o", "repo": "r", "branch": "main", "sha": "a" * 40}
+
+        async def fetch(tool_name: str, _args: dict) -> dict:
+            return await mirror.execute("gh_mirror_fetch", args)
+
+        env.service.execute = fetch  # the test tool routes to a real GitMirrorService
+        async with FakeHelper(sock, _reply({"ok": False, "error": "branch_moved"})):
+            err = await self._polled_error(env)
+        assert err["code"] == "execution_failed"
+        assert err["message"] == MESSAGES["branch_moved"]
+
+
+class TestUnexpectedFailureAfterApproval:
+    """A non-pipeline exception after approval must still leave a final stored result."""
+
+    async def test_polled_call_reports_internal_error_not_executing(self, env, monkeypatch):
+        async def boom(request):
+            raise RuntimeError("bug with detail token=abc123")
+
+        monkeypatch.setattr(env.pipeline, "_execute", boom)
+        first = await _ask(env)
+        assert first["status"] == "pending_approval"
+        rid = first["request_id"]
+        await env.answer("allow")
+        res = (await call(env, "gateway_result", {"request_id": rid, "wait_seconds": 5}))[
+            "structuredContent"
+        ]
+        assert res["status"] == "error"
+        assert res["error"] == {
+            "code": "internal_error",
+            "message": "Internal error",
+            "request_id": rid,
+        }
+        assert "abc123" not in json.dumps(res)
+        stored = json.loads((await env.db.get_pending(rid))["result"])
+        assert stored["code"] == "internal_error"
+
+    async def test_inline_call_reports_internal_error(self, env, monkeypatch):
+        async def boom(request):
+            raise RuntimeError("bug")
+
+        monkeypatch.setattr(env.pipeline, "_execute", boom)
+        env.mcp._inline_wait = 5
+        task = asyncio.create_task(call(env, "ha_call_service", {"entity_id": "light.a"}))
+        await env.answer("allow")
+        r = await task
+        assert r["isError"] is True
+        assert r["structuredContent"]["error"]["code"] == "internal_error"

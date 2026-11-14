@@ -104,9 +104,9 @@ class GitMirrorService(ServiceHandler):
         try:
             result = await self._call(request, FETCH_TIMEOUT_S)
         except _HelperFailed as e:
-            raise ExecutionError(MESSAGES[e.code]) from None
+            raise ExecutionError(MESSAGES[e.code], public=True) from None
         if not isinstance(result, dict):
-            raise ExecutionError(MESSAGES["internal"])
+            raise ExecutionError(MESSAGES["internal"], public=True)
         return result
 
     async def lookup(

@@ -135,6 +135,11 @@ class RateLimited(PipelineError):
 class ExecutionFailed(PipelineError):
     code = "execution_failed"
 
+    def __init__(self, message: str, *, public: bool = False, **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+        # fixed handler text (ExecutionError(public=True)) that a stored result may keep
+        self.public = public
+
 
 class ServiceUnauthorized(ExecutionFailed):
     """The service needs owner action (OAuth consent). Carries no upstream detail."""
@@ -187,10 +192,15 @@ def _payload(result: Outcome | PipelineError) -> dict[str, Any]:
         status = "denied"
     else:
         status = "error"
-    # Upstream detail is never stored: execution errors keep a fixed message
-    message = "Execution failed" if isinstance(result, ExecutionFailed) else result.message
+    # Upstream detail is never stored: execution errors keep a fixed message unless the
+    # handler marked its own message public (fixed text, ExecutionError(public=True))
+    message = result.message
+    if isinstance(result, ExecutionFailed) and not result.public:
+        message = "Execution failed"
     return {"status": status, "code": result.code, "request_id": result.request_id, "data": message}
 
+
+INTERNAL_MESSAGE = "Internal error"  # code internal_error (PipelineError.code)
 
 INTERRUPTED_MESSAGE = (
     "gateway restarted while the call was executing; check the target before retrying"
@@ -458,7 +468,7 @@ class Pipeline:
             # no upstream detail reaches the agent (DESIGN 7.5)
             raise ServiceUnauthorized("Service unauthorized", request_id=request.id) from e
         except ExecutionError as e:
-            raise ExecutionFailed(str(e), request_id=request.id) from e
+            raise ExecutionFailed(str(e), request_id=request.id, public=e.public) from e
         except Exception as e:
             logger.exception("Unexpected error executing %s", request.tool_name)
             raise ExecutionFailed("Internal execution error", request_id=request.id) from e
@@ -573,6 +583,14 @@ class Pipeline:
     async def complete(self, request_id: str) -> None:
         """The transport delivered the response; drop the pending row."""
         await self._db.delete_pending(request_id)
+
+    async def store_internal_error(self, request_id: str) -> PipelineError:
+        """Final result for a call that failed unexpectedly (not a PipelineError) after its
+        pending row existed, so it is never reported as ``executing`` forever. Fixed text
+        only; the caller logs the exception."""
+        error = PipelineError(INTERNAL_MESSAGE, request_id=request_id)
+        await self._db.update_pending_result(request_id, json.dumps(_payload(error)))
+        return error
 
     async def store_undelivered(self, request_id: str, result: Outcome | PipelineError) -> None:
         """Keep a final result in the DB (get_pending_results, MCP gateway_result)."""

@@ -143,6 +143,7 @@ async def test_execute_error_codes_map_to_fixed_messages(sock: Path, code: str) 
         with pytest.raises(ExecutionError) as ei:
             await _svc(sock).execute("gh_mirror_fetch", ARGS)
     assert str(ei.value) == MESSAGES[code]
+    assert ei.value.public is True  # fixed text: kept in polled (stored) results
 
 
 async def test_execute_unknown_code_is_internal(sock: Path) -> None:
