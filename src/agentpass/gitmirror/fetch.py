@@ -101,14 +101,14 @@ def _classify(stderr: str) -> str:
     return "internal"
 
 
-def _scrub(text: str, settings: FetchSettings) -> str:
+def scrub(text: str, settings: FetchSettings) -> str:
     if settings.token:
         text = text.replace(_basic(settings.token), "***").replace(settings.token, "***")
     return text
 
 
 def _journal(what: str, proc: subprocess.CompletedProcess, settings: FetchSettings) -> None:
-    stderr = _scrub(proc.stderr or "", settings).strip()
+    stderr = scrub(proc.stderr or "", settings).strip()
     print(f"agentgit: git {what} failed (exit {proc.returncode}): {stderr}", file=sys.stderr)
 
 
