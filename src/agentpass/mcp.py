@@ -49,7 +49,9 @@ GATEWAY_TOOLS: list[dict[str, Any]] = [
         "name": "gateway_result",
         "description": (
             "Fetch the result of an earlier call that returned pending_approval. "
-            "Waits up to wait_seconds for the human decision."
+            "Waits up to wait_seconds for the human decision or the call to finish. "
+            "status executing: approved and still running, which can take minutes; "
+            "keep polling with wait_seconds until it reports the result."
         ),
         "inputSchema": {
             "type": "object",
@@ -375,6 +377,12 @@ class McpServer:
                 await asyncio.wait({task}, timeout=min(wait, MAX_WAIT_SECONDS))
                 row = await self._lookup(identity.id, request_id)
         if row["result"] is None:
+            if row["state"] == "resolved":  # approved, still running: expires_at is over
+                return {
+                    "status": "executing",
+                    "request_id": request_id,
+                    "retry": "call gateway_result",
+                }
             if row["expires_at"] <= _iso(time.time()):
                 return self._stored(request_id, _TIMEOUT_PAYLOAD)
             return {

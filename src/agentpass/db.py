@@ -411,6 +411,26 @@ class Database:
         await conn.commit()
         return rows
 
+    async def interrupt_executing(self, result_json: str) -> list[dict[str, Any]]:
+        """At startup: approved calls a restart cut off get *result_json* as their result.
+
+        A ``resolved`` row without a result was approved and still executing when the
+        previous run stopped; nothing will ever finish it. Each row's ``request_id`` is
+        added to the stored payload. Returns the rows as they were before the update.
+        """
+        conn = self._get_conn()
+        cursor = await conn.execute(
+            "SELECT * FROM pending_requests WHERE state = 'resolved' AND result IS NULL"
+        )
+        rows = [dict(row) for row in await cursor.fetchall()]
+        await conn.execute(
+            "UPDATE pending_requests SET result = json_set(?, '$.request_id', request_id) "
+            "WHERE state = 'resolved' AND result IS NULL",
+            (result_json,),
+        )
+        await conn.commit()
+        return rows
+
     async def get_pending(self, request_id: str) -> dict[str, Any] | None:
         """Get a single pending request, or None if not found."""
         conn = self._get_conn()

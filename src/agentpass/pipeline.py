@@ -192,6 +192,22 @@ def _payload(result: Outcome | PipelineError) -> dict[str, Any]:
     return {"status": status, "code": result.code, "request_id": result.request_id, "data": message}
 
 
+INTERRUPTED_MESSAGE = (
+    "gateway restarted while the call was executing; check the target before retrying"
+)
+
+
+def interrupted_result() -> str:
+    """Stored result for an approved call a restart cut off mid-execution.
+
+    Same shape as an ``ExecutionFailed`` payload (``_payload``) with its own code; the
+    database adds each row's ``request_id`` (``Database.interrupt_executing``).
+    """
+    return json.dumps(
+        {"status": "error", "code": "execution_interrupted", "data": INTERRUPTED_MESSAGE}
+    )
+
+
 _ERRORS_BY_CODE: dict[str, type[PipelineError]] = {
     cls.code: cls
     for cls in (PolicyDenied, ApprovalDenied, ApprovalTimeout, ExecutionFailed, ServiceUnauthorized)

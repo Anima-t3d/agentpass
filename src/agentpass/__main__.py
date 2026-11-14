@@ -36,6 +36,7 @@ from agentpass.executor import Executor
 from agentpass.listen import bind_group_socket, remove_socket
 from agentpass.mcp import McpServer
 from agentpass.models import Decision
+from agentpass.pipeline import interrupted_result
 from agentpass.preview import PreviewService
 from agentpass.registry import build_registry
 from agentpass.remembered import RememberedService, format_summary
@@ -464,6 +465,14 @@ async def run(args: argparse.Namespace) -> None:
     # and abandon approvals left over from the previous run; then settle their results
     await coordinator.start()
     try:
+        # Approved calls cut off mid-execution: before settle_orphans, which would
+        # otherwise report them as an approval timeout or denial
+        for row in await db.interrupt_executing(interrupted_result()):
+            logger.warning(
+                "Approved call %s (%s) was interrupted by the restart",
+                row["request_id"],
+                row["tool_name"],
+            )
         await db.settle_orphans()  # approvals nobody can answer any more get a final result
         await db.cleanup_stale_requests()
 

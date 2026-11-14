@@ -196,6 +196,30 @@ class TestPendingRequests:
         assert stale == []
 
 
+class TestInterruptExecuting:
+    async def test_interrupt_executing_marks_only_resolved_rows_without_result(self, db):
+        future = "2099-01-01T00:00:00Z"
+        for rid in ("run", "done", "wait", "gone"):
+            await db.insert_pending(rid, "t", {}, "t", future)
+        for rid in ("run", "done"):
+            assert await db.transition_pending(rid, "resolved")
+        await db.update_pending_result("done", '{"status": "executed", "data": 1}')
+        await db.abandon_pending()  # "wait" and "gone" become abandoned...
+        await db.insert_pending("open", "t", {}, "t", future)  # ...this one stays pending
+
+        payload = {"status": "error", "code": "execution_interrupted", "data": "msg"}
+        rows = await db.interrupt_executing(json.dumps(payload))
+
+        assert [r["request_id"] for r in rows] == ["run"]
+        stored = json.loads((await db.get_pending("run"))["result"])
+        assert stored == {**payload, "request_id": "run"}
+        assert json.loads((await db.get_pending("done"))["result"])["status"] == "executed"
+        for rid in ("wait", "gone", "open"):
+            assert (await db.get_pending(rid))["result"] is None
+        assert (await db.get_pending("open"))["state"] == "pending"
+        assert await db.interrupt_executing(json.dumps(payload)) == []  # idempotent
+
+
 class TestUpdatePendingResult:
     async def test_stores_result_json(self, db):
         """update_pending_result writes JSON to the result column."""

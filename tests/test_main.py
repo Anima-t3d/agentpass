@@ -235,6 +235,13 @@ class TestRunStartupSequence:
         async def track_coordinator_start():
             call_order.append("coordinator.start")
 
+        async def track_interrupt(_result_json):
+            call_order.append("db.interrupt_executing")
+            return []
+
+        async def track_settle():
+            call_order.append("db.settle_orphans")
+
         async def track_stop_wait():
             call_order.append("ws_ready")
 
@@ -242,6 +249,8 @@ class TestRunStartupSequence:
         mock_db.cleanup_stale_requests = AsyncMock(side_effect=track_db_cleanup)
         mock_ha.health_check = AsyncMock(side_effect=track_health_check)
         mock_coordinator.start = AsyncMock(side_effect=track_coordinator_start)
+        mock_db.interrupt_executing = AsyncMock(side_effect=track_interrupt)
+        mock_db.settle_orphans = AsyncMock(side_effect=track_settle)
         mock_stop_event.wait = AsyncMock(side_effect=track_stop_wait)
 
         with (
@@ -262,6 +271,8 @@ class TestRunStartupSequence:
         assert call_order.index("db.initialize") < call_order.index("ha.health_check")
         assert call_order.index("ha.health_check") < call_order.index("coordinator.start")
         assert call_order.index("coordinator.start") < call_order.index("ws_ready")
+        # Approved calls cut off mid-execution are marked before orphans are settled
+        assert call_order.index("db.interrupt_executing") < call_order.index("db.settle_orphans")
 
     @pytest.mark.asyncio
     async def test_logs_ready_message(self, caplog):
