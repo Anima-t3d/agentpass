@@ -59,6 +59,11 @@ def git_env(settings: FetchSettings) -> dict[str, str]:
         ("fetch.recurseSubmodules", "false"),
         ("transfer.fsckObjects", "true"),
         ("fetch.fsckObjects", "true"),
+        # no detached auto-gc/maintenance (inheriting this env) may outlive the flock
+        ("gc.auto", "0"),
+        ("maintenance.auto", "false"),
+        # never send the extraHeader token to a host we were redirected to
+        ("http.followRedirects", "false"),
     ]
     if settings.token:
         config.append(("http.extraHeader", f"Authorization: Basic {_basic(settings.token)}"))
@@ -193,6 +198,7 @@ def _fetch_locked(req: FetchRequest, repo: Path, settings: FetchSettings, starte
         "fetch",
         "--no-tags",
         "--no-write-fetch-head",
+        "--no-auto-maintenance",
         "--quiet",
         "--",
         settings.remote_url(req),

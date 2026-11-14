@@ -211,7 +211,7 @@ def test_env_is_closed(monkeypatch, settings) -> None:
     monkeypatch.setenv("GIT_SSH_COMMAND", "evil")
     s = replace(settings, allowed_protocols=("https",))
     env = git_env(s)
-    assert set(env) == _expected_keys(8)
+    assert set(env) == _expected_keys(11)
     assert env["PATH"] == "/usr/bin:/bin"
     assert env["HOME"] == str(settings.home)
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
@@ -228,14 +228,29 @@ def test_env_is_closed(monkeypatch, settings) -> None:
         ("fetch.recurseSubmodules", "false"),
         ("transfer.fsckObjects", "true"),
         ("fetch.fsckObjects", "true"),
+        ("gc.auto", "0"),
+        ("maintenance.auto", "false"),
+        ("http.followRedirects", "false"),
         ("http.extraHeader", f"Authorization: Basic {TOKEN_B64}"),
     ]
 
 
 def test_env_without_token_has_no_auth_header(settings) -> None:
     env = git_env(replace(settings, token=""))
-    assert set(env) == _expected_keys(7)  # protocol.allow, protocol.file.allow, 5 hardening
-    assert not any(k == "http.extraHeader" for k, _ in _config_pairs(env))
+    assert set(env) == _expected_keys(10)
+    assert _config_pairs(env) == [
+        ("protocol.allow", "never"),
+        ("protocol.file.allow", "always"),
+        ("core.hooksPath", "/dev/null"),
+        ("core.fsmonitor", "false"),
+        ("fetch.recurseSubmodules", "false"),
+        ("transfer.fsckObjects", "true"),
+        ("fetch.fsckObjects", "true"),
+        ("gc.auto", "0"),
+        ("maintenance.auto", "false"),
+        ("http.followRedirects", "false"),
+    ]
+    assert not any(TOKEN in v or TOKEN_B64 in v for v in env.values())
     assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
@@ -270,7 +285,8 @@ def test_auth_failure_maps_to_auth_failed(upstream, repo, settings, stderr) -> N
     with pytest.raises(HelperError) as e:
         fetch(req_for(upstream), repo, replace(settings, token="", run=rec))
     assert e.value.code == "auth_failed"
-    fetch_kw = next(kw for argv, kw in rec.calls if "fetch" in argv)
+    fetch_argv, fetch_kw = next((a, kw) for a, kw in rec.calls if "fetch" in a)
+    assert "--no-auto-maintenance" in fetch_argv
     assert fetch_kw["env"]["GIT_TERMINAL_PROMPT"] == "0"
     assert fetch_kw.get("stdin") == subprocess.DEVNULL
 
