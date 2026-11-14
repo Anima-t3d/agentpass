@@ -14,3 +14,6 @@ rules:
     action: ask
     description: Sending mail always reaches a human, on a passkey
     approval: { require: passkey }
+  - pattern: "gh_mirror_fetch(*)"
+    action: ask
+    description: Every git mirror update is approved for its exact commit, never allowed always
