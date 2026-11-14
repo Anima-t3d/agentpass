@@ -290,7 +290,14 @@ def test_passkey_error_does_not_depend_on_the_message_wording(tmp_path, monkeypa
     assert codes(report.errors) == ["approval-passkey"] and not report.warnings
 
 
-def _preview_config(tmp_path, tools_yaml: str, handler: str = "http"):
+def _preview_config(
+    tmp_path,
+    tools_yaml: str,
+    handler: str = "http",
+    extra: str = "",
+    url: str = "http://localhost",
+    auth: str = "{type: bearer, token: t}",
+):
     (tmp_path / "tools.yaml").write_text(tools_yaml)
     (tmp_path / "gateway.yaml").write_text(
         f"""\
@@ -299,7 +306,7 @@ gateway: {{health_port: 8210}}
 agent: {{token: t}}
 messenger: {{type: telegram, telegram: {{token: t, chat_id: 1, allowed_users: [1]}}}}
 services:
-  svc: {{url: 'http://localhost', auth: {{type: bearer, token: t}}, handler: {handler},
+  svc: {{url: '{url}', auth: {auth}, handler: {handler},{extra}
     tools: '{tmp_path / "tools.yaml"}'}}
 storage: {{type: sqlite, path: ./d.db}}
 """
@@ -334,6 +341,36 @@ def test_reserved_arg_name_is_a_config_error(tmp_path):
     )
     assert report.exit_code() == 1
     assert any("reserved" in f.message for f in report.errors)
+
+
+LOOKUP_PREVIEW = PREVIEW_TOOL % (
+    'lookups: [{id: s, method: GET, path: "/s/{id}"}]\n      fields: [{label: a, value: b}]'
+)
+
+
+def test_python_service_with_preview_lookups_has_no_lookup_warning(tmp_path):
+    report = _preview_config(
+        tmp_path, LOOKUP_PREVIEW, handler="python", extra=" preview_lookups: true,"
+    )
+    assert "preview-lookup-unsupported" not in [f.code for f in report.warnings]
+
+
+def test_python_service_without_flag_still_warns(tmp_path):
+    report = _preview_config(tmp_path, LOOKUP_PREVIEW, handler="python")
+    assert "preview-lookup-unsupported" in [f.code for f in report.warnings]
+
+
+def test_python_unix_socket_service_with_auth_none_passes_check(tmp_path):
+    report = _preview_config(
+        tmp_path,
+        LOOKUP_PREVIEW,
+        handler="python",
+        extra=" preview_lookups: true,",
+        url="unix:///run/agentgit/helper.sock",
+        auth="{type: none}",
+    )
+    assert not report.errors
+    assert report.warnings == []
 
 
 def test_unimplemented_renderer_warns(tmp_path, monkeypatch):

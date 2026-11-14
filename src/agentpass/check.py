@@ -441,11 +441,17 @@ def _lint_previews(config: Config, registry: ToolRegistry, report: Report) -> No
                 )
             continue
         service = config.services.get(tool.service_name)
-        if spec.lookups and service is not None and service.handler != "http":
+        if (
+            spec.lookups
+            and service is not None
+            and service.handler != "http"
+            and not service.preview_lookups
+        ):
             report.warn(
                 "preview-lookup-unsupported",
                 where,
-                f"preview lookups need an http service; {tool.service_name!r} uses "
+                f"preview lookups need an http service or a python service with "
+                f"preview_lookups: true; {tool.service_name!r} uses "
                 f"handler {service.handler!r}, so the preview will be unavailable",
             )
         if spec.renderer not in IMPLEMENTED_RENDERERS:

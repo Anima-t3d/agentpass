@@ -361,6 +361,7 @@ class ServiceConfig:
     tools_file: str = ""
     tools: list[ToolDefinition] = field(default_factory=list)
     errors: list[ErrorMapping] = field(default_factory=list)
+    preview_lookups: bool = False  # python handlers only: the handler can serve preview lookups
 
 
 # --- Permission dataclasses ---
@@ -851,16 +852,26 @@ def load_config(path: str = "config.yaml") -> Config:
             tools_path = str(config_dir / tools_file)
             tools = load_tools_file(tools_path, svc_name)
 
+        handler = svc_data.get("handler", "http")
+        preview_lookups = svc_data.get("preview_lookups", False)
+        if not isinstance(preview_lookups, bool):
+            raise ConfigError(f"services.{svc_name}.preview_lookups must be a boolean")
+        if preview_lookups and handler == "http":
+            raise ConfigError(
+                f"services.{svc_name}.preview_lookups is only meaningful with handler: python"
+            )
+
         services[svc_name] = ServiceConfig(
             name=svc_name,
             url=url,
             auth=auth,
-            handler=svc_data.get("handler", "http"),
+            handler=handler,
             handler_class=svc_data.get("handler_class", ""),
             health=health,
             tools_file=tools_file,
             tools=tools,
             errors=errors,
+            preview_lookups=preview_lookups,
         )
 
     if not services:
