@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import BinaryIO
@@ -25,13 +27,37 @@ from agentpass.gitmirror.validate import (
 )
 
 MAX_REQUEST = 4096
+READ_TIMEOUT_S = 10.0
 HOME = Path("/var/lib/agentgit")
 ALLOWLIST = Path("/etc/agentgit/repos")
 MIRROR_ROOT = Path("/srv/git-mirror")
 
 
-def _read_line(stdin: BinaryIO) -> bytes:
-    line = stdin.readline(MAX_REQUEST + 1)
+def _read_line(stdin: BinaryIO, timeout_s: float) -> bytes:
+    """Read one request line, bounded by an overall deadline when stdin has a real fd.
+
+    select()+os.read on the descriptor (rather than a socket timeout or SIGALRM) keeps
+    the deadline on the read only, needs no knowledge of the fd being a socket, and
+    avoids a buffered reader blocking again on a partial line.
+    """
+    try:
+        fd = stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = None
+    if fd is None:  # in-memory streams (tests): cannot block
+        line = stdin.readline(MAX_REQUEST + 1)
+    else:
+        deadline = time.monotonic() + timeout_s
+        line = b""
+        while b"\n" not in line and len(line) <= MAX_REQUEST:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                raise HelperError("timeout")
+            chunk = os.read(fd, MAX_REQUEST + 1 - len(line))
+            if not chunk:
+                break
+            line += chunk
+        line = line.split(b"\n", 1)[0] + (b"\n" if b"\n" in line else b"")
     if line.endswith(b"\n"):
         line = line[:-1]
     if len(line) > MAX_REQUEST:
@@ -79,16 +105,22 @@ def serve(
     allowlist_path: Path,
     mirror_root: Path,
     api: GitHubApi | None = None,
+    read_timeout_s: float = READ_TIMEOUT_S,
 ) -> None:
     try:
-        response = _handle(_parse(_read_line(stdin)), settings, allowlist_path, mirror_root, api)
+        response = _handle(
+            _parse(_read_line(stdin, read_timeout_s)), settings, allowlist_path, mirror_root, api
+        )
     except HelperError as e:
         response = {"ok": False, "error": e.code}
     except Exception:
         print(scrub(traceback.format_exc(), settings), file=sys.stderr)
         response = {"ok": False, "error": "internal"}
-    stdout.write((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
-    stdout.flush()
+    try:
+        stdout.write((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
+        stdout.flush()
+    except OSError:  # peer already gone; nothing left to tell it
+        pass
 
 
 def load_token() -> str:

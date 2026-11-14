@@ -200,3 +200,72 @@ def test_load_token(tmp_path, monkeypatch):
     assert helper.load_token() == "abc"
     (tmp_path / "github-token").write_text("\n")
     assert helper.load_token() == ""
+
+
+def _serve_on_socket(env, server, **kw):
+    f = server.makefile("rwb", buffering=0)
+    serve(f, f, env["settings"], env["allow"], env["root"], api=FakeApi(), **kw)
+    f.close()
+
+
+def test_silent_peer_times_out(env):
+    import socket
+    import time
+
+    client, server = socket.socketpair()
+    with client, server:
+        start = time.monotonic()
+        _serve_on_socket(env, server, read_timeout_s=0.3)
+        assert time.monotonic() - start < 3
+        assert json.loads(client.recv(1000)) == {"ok": False, "error": "timeout"}
+
+
+def test_partial_line_times_out(env):
+    import socket
+
+    client, server = socket.socketpair()
+    with client, server:
+        client.sendall(b'{"op":"pi')
+        _serve_on_socket(env, server, read_timeout_s=0.3)
+        assert json.loads(client.recv(1000))["error"] == "timeout"
+
+
+def test_closed_peer_does_not_hang(env):
+    import socket
+
+    client, server = socket.socketpair()
+    with server:
+        client.close()
+        _serve_on_socket(env, server, read_timeout_s=0.3)  # EOF -> invalid_request, write may fail
+
+
+def test_timeout_with_unwritable_peer_exits_quietly(env):
+    import socket
+
+    client, server = socket.socketpair()
+    with server:
+        client.close()
+        f = server.makefile("rwb", buffering=0)
+        server.shutdown(socket.SHUT_RDWR)
+        serve(f, f, env["settings"], env["allow"], env["root"], read_timeout_s=0.2)
+
+
+def test_socket_end_to_end(env):
+    import socket
+
+    client, server = socket.socketpair()
+    with client, server:
+        client.sendall(json.dumps(body(env)).encode() + b"\n")
+        _serve_on_socket(env, server, read_timeout_s=5)
+        res = json.loads(client.recv(100000))
+        assert res["ok"] is True and res["result"]["sha"] == env["tip"]
+
+
+def test_socket_oversize(env):
+    import socket
+
+    client, server = socket.socketpair()
+    with client, server:
+        client.sendall(b"a" * 5000)
+        _serve_on_socket(env, server, read_timeout_s=5)
+        assert json.loads(client.recv(1000))["error"] == "invalid_request"
