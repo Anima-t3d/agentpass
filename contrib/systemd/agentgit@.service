@@ -13,11 +13,11 @@
 #   - agentpass installed in /opt/agentpass/venv
 [Unit]
 Description=AgentPass git mirror helper (one connection)
+# a failed instance (one per connection) is garbage-collected, not left in systemctl --failed
+CollectMode=inactive-or-failed
 
 [Service]
 Type=simple
-# a failed instance (one per connection) is garbage-collected, not left in systemctl --failed
-CollectMode=inactive-or-failed
 User=agentgit
 Group=agentgit
 SupplementaryGroups=agentgit-readers

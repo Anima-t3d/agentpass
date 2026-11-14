@@ -229,11 +229,18 @@ async def test_preview_commit_failing_is_unavailable():
 # --- example units ----------------------------------------------------------
 
 
-def _unit(name: str) -> dict[str, list[str]]:
+def _unit(name: str, section: str | None = None) -> dict[str, list[str]]:
+    """Key -> values of a unit file; only the keys of [section] when one is given."""
     out: dict[str, list[str]] = {}
+    current = None
     for line in (ROOT / "contrib/systemd" / name).read_text().splitlines():
         line = line.strip()
-        if not line or line.startswith(("#", ";", "[")):
+        if line.startswith("["):
+            current = line.strip("[]")
+            continue
+        if not line or line.startswith(("#", ";")):
+            continue
+        if section is not None and current != section:
             continue
         key, _, value = line.partition("=")
         out.setdefault(key, []).append(value)
@@ -250,8 +257,14 @@ def test_socket_unit():
     assert u["MaxConnections"] == ["4"]
 
 
+def test_service_unit_collects_failed_instances():
+    """CollectMode is a [Unit] setting; systemd ignores it under [Service]."""
+    assert _unit("agentgit@.service", "Unit").get("CollectMode") == ["inactive-or-failed"]
+    assert "CollectMode" not in _unit("agentgit@.service", "Service")
+
+
 def test_service_unit():
-    u = _unit("agentgit@.service")
+    u = _unit("agentgit@.service", "Service")
     expected = {
         "User": "agentgit",
         "Group": "agentgit",
@@ -265,7 +278,6 @@ def test_service_unit():
         "UMask": "0027",
         "RuntimeMaxSec": "660",
         "Environment": "AGENTGIT_FETCH_TIMEOUT_S=600",
-        "CollectMode": "inactive-or-failed",
         "MemoryMax": "1G",
         "ProtectSystem": "strict",
         "ReadWritePaths": "/srv/git-mirror",
