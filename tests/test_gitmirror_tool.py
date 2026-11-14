@@ -305,3 +305,59 @@ def test_timeouts_are_nested():
     assert budget == DEFAULT_FETCH_TIMEOUT_S == 600
     assert budget < runtime_max < FETCH_TIMEOUT_S
 
+
+# --- example floor ----------------------------------------------------------
+
+
+async def test_example_floor_asks_and_refuses_remembered_allow(tmp_path):
+    """With the example floor, no allow (agent rule or remembered "Allow always") may skip
+    the approval: an allowed fetch has no pending row and would wait inline for minutes."""
+    import shutil
+
+    from agentpass.db import Database
+    from agentpass.remembered import RememberedService, iso, tool_fingerprint
+
+    policy = tmp_path / "policy"
+    policy.mkdir()
+    shutil.copy(ROOT / "policy/_floor.example.yaml", policy / "_floor.yaml")
+    shutil.copy(ROOT / "policy/git_mirror.yaml", policy / "git_mirror.yaml")
+    (tmp_path / "agents").mkdir()
+    _, digest = generate_token("a")
+    (tmp_path / "agents" / "a.yaml").write_text(
+        f"id: a\ntoken_hash: '{digest}'\nextends: [git_mirror]\n"
+        "rules:\n  - { pattern: 'gh_mirror_fetch(*)', action: allow }\n"
+    )
+    agent = load_agents(tmp_path / "agents", policy).get("a")
+    reg = _registry()
+    sig = build_signature(TOOL, ARGS, reg)
+    result = PermissionEngine(agent.permissions, reg).evaluate(TOOL, ARGS, sig)
+    assert result.decision == Decision.ASK and result.floor
+
+    db = Database(str(tmp_path / "t.db"))
+    await db.initialize()
+    try:
+        await db.upsert_remembered_rule(
+            {
+                "agent_id": "a",
+                "tool_name": TOOL,
+                "scope": "tool",
+                "signature": None,
+                "args_hash": None,
+                "action": "allow",
+                "pattern": f"{TOOL}(*)",
+                "tool_fingerprint": tool_fingerprint(reg.get_tool(TOOL)),
+                "created_at": iso(),
+                "expires_at": None,
+                "created_by": "test",
+                "source_request_id": "req-1",
+            }
+        )
+        service = RememberedService(db, reg)
+        no_floor = await service.resolve("a", TOOL, sig, ARGS, Decision.ASK, None)
+        assert no_floor is not None and no_floor.decision == Decision.ALLOW  # rule is live
+        verdict = await service.resolve(
+            "a", TOOL, sig, ARGS, result.decision, result.approval, result.floor
+        )
+        assert verdict is None
+    finally:
+        await db.close()
