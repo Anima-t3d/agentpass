@@ -20,7 +20,7 @@ FETCH_TIMEOUT_S = 660.0  # helper fetch timeout (600 s) plus slack
 HEALTH_TIMEOUT_S = 5.0
 MAX_REPLY = 1024 * 1024
 _FIELDS = ("owner", "repo", "branch", "sha")
-_LOOKUP_KINDS = ("commit", "relation")
+_LOOKUP_PATHS = {"/commit": "commit", "/relation": "relation"}  # preview path -> helper kind
 _UNIX_PREFIX = "unix://"
 
 MESSAGES = {
@@ -73,6 +73,7 @@ class GitMirrorService(ServiceHandler):
             OSError,  # socket missing, refused, reset
             TimeoutError,  # deadline
             ValueError,  # bad JSON or UTF-8
+            RecursionError,  # deeply nested JSON
             asyncio.IncompleteReadError,  # closed before a full line
             asyncio.LimitOverrunError,  # reply over MAX_REPLY
         ) as e:
@@ -117,9 +118,10 @@ class GitMirrorService(ServiceHandler):
         timeout: float = 2.0,
         max_bytes: int = 262144,
     ) -> Any:
-        if path not in _LOOKUP_KINDS:
+        kind = _LOOKUP_PATHS.get(path)
+        if kind is None:
             raise LookupError("invalid_request")
-        request = {"op": "lookup", "kind": path, **{k: args.get(k) for k in _FIELDS}}
+        request = {"op": "lookup", "kind": kind, **{k: args.get(k) for k in _FIELDS}}
         try:
             result = await self._call(request, timeout)
         except _HelperFailed as e:

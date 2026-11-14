@@ -174,6 +174,30 @@ async def test_execute_malformed_reply_is_internal(sock: Path, reply: bytes | No
     assert str(ei.value) == "mirror helper failed"
 
 
+async def test_execute_deeply_nested_reply_is_internal(sock: Path) -> None:
+    depth = 100_000  # json.loads raises RecursionError, well under MAX_REPLY
+
+    async def respond(req: dict) -> bytes:
+        return b'{"ok":true,"result":' + b"[" * depth + b"]" * depth + b"}\n"
+
+    async with FakeHelper(sock, respond):
+        with pytest.raises(ExecutionError) as ei:
+            await _svc(sock).execute("gh_mirror_fetch", ARGS)
+    assert str(ei.value) == "mirror helper failed"
+
+
+async def test_lookup_deeply_nested_reply_is_internal(sock: Path) -> None:
+    depth = 100_000
+
+    async def respond(req: dict) -> bytes:
+        return b'{"ok":true,"result":' + b"[" * depth + b"]" * depth + b"}\n"
+
+    async with FakeHelper(sock, respond):
+        with pytest.raises(LookupError) as ei:
+            await _svc(sock).lookup("/commit", ARGS)
+    assert ei.value.args == ("internal",)
+
+
 async def test_execute_socket_missing_is_internal_without_os_text(sock: Path) -> None:
     with pytest.raises(ExecutionError) as ei:
         await _svc(sock).execute("gh_mirror_fetch", ARGS)
@@ -219,7 +243,7 @@ async def test_execute_other_tool_is_value_error(sock: Path) -> None:
 async def test_lookup_commit_returns_result(sock: Path) -> None:
     result = {"sha": SHA, "headline": "fix", "tip": SHA}
     async with FakeHelper(sock, _reply({"ok": True, "result": result})) as helper:
-        out = await _svc(sock).lookup("commit", {**ARGS, "junk": 1})
+        out = await _svc(sock).lookup("/commit", {**ARGS, "junk": 1})
     assert out == result
     assert helper.requests == [{"op": "lookup", "kind": "commit", **ARGS}]
 
@@ -227,7 +251,7 @@ async def test_lookup_commit_returns_result(sock: Path) -> None:
 async def test_lookup_relation_sends_kind(sock: Path) -> None:
     result = {"state": "new", "previous": None, "summary": "first fetch of this branch"}
     async with FakeHelper(sock, _reply({"ok": True, "result": result})) as helper:
-        out = await _svc(sock).lookup("relation", ARGS)
+        out = await _svc(sock).lookup("/relation", ARGS)
     assert out == result
     assert helper.requests[0]["kind"] == "relation"
 
@@ -236,18 +260,21 @@ async def test_lookup_relation_sends_kind(sock: Path) -> None:
 async def test_lookup_error_raises_lookup_error_with_code(sock: Path, code: str) -> None:
     async with FakeHelper(sock, _reply({"ok": False, "error": code})):
         with pytest.raises(LookupError) as ei:
-            await _svc(sock).lookup("commit", ARGS)
+            await _svc(sock).lookup("/commit", ARGS)
     assert ei.value.args == (code,)
 
 
 async def test_lookup_unknown_code_is_internal(sock: Path) -> None:
     async with FakeHelper(sock, _reply({"ok": False, "error": "leaky text"})):
         with pytest.raises(LookupError) as ei:
-            await _svc(sock).lookup("commit", ARGS)
+            await _svc(sock).lookup("/commit", ARGS)
     assert ei.value.args == ("internal",)
 
 
-@pytest.mark.parametrize("path", ["", "commits", "fetch", "../commit", "commit/x"])
+@pytest.mark.parametrize(
+    "path",
+    ["", "commit", "relation", "/commits", "/fetch", "//commit", "/../commit", "/commit/x"],
+)
 async def test_lookup_invalid_path(sock: Path, path: str) -> None:
     async with FakeHelper(sock, _reply({"ok": True, "result": {}})) as helper:
         with pytest.raises(LookupError) as ei:
@@ -258,7 +285,7 @@ async def test_lookup_invalid_path(sock: Path, path: str) -> None:
 
 async def test_lookup_socket_missing_is_internal(sock: Path) -> None:
     with pytest.raises(LookupError) as ei:
-        await _svc(sock).lookup("commit", ARGS)
+        await _svc(sock).lookup("/commit", ARGS)
     assert ei.value.args == ("internal",)
 
 
@@ -270,7 +297,7 @@ async def test_lookup_honours_timeout(sock: Path) -> None:
     async with FakeHelper(sock, respond):
         start = time.monotonic()
         with pytest.raises(LookupError) as ei:
-            await _svc(sock).lookup("commit", ARGS, timeout=0.2)
+            await _svc(sock).lookup("/commit", ARGS, timeout=0.2)
         assert time.monotonic() - start < 2
     assert ei.value.args == ("internal",)
 
@@ -287,7 +314,7 @@ async def test_slow_fetch_does_not_block_lookup(sock: Path) -> None:
         fetch = asyncio.create_task(svc.execute("gh_mirror_fetch", ARGS))
         await asyncio.sleep(0.05)
         start = time.monotonic()
-        assert await svc.lookup("commit", ARGS) == {"looked": True}
+        assert await svc.lookup("/commit", ARGS) == {"looked": True}
         assert time.monotonic() - start < 0.5
         assert not fetch.done()
         assert await fetch == {"done": True}
