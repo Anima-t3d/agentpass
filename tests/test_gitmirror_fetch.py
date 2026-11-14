@@ -368,6 +368,23 @@ def test_unsafe_mirror_parent(upstream, repo, settings) -> None:
         fetch(req_for(upstream), repo, replace(settings, run=rec))
     assert e.value.code == "unsafe_path"
     assert rec.calls == []
+    # checked before the lock file is opened: nothing is created in an unsafe directory
+    assert not (repo.parent / f".{repo.name}.lock").exists()
+
+
+def test_lock_file_opened_nonblocking(upstream, repo, settings, monkeypatch) -> None:
+    """O_NONBLOCK: a FIFO planted at the lock path cannot hang the helper in open()."""
+    seen: list[int] = []
+    real_open = os.open
+
+    def spy(path, flags, *a, **kw):
+        if str(path).endswith(f".{repo.name}.lock"):
+            seen.append(flags)
+        return real_open(path, flags, *a, **kw)
+
+    monkeypatch.setattr(os, "open", spy)
+    fetch(req_for(upstream), repo, settings)
+    assert seen and all(f & os.O_NONBLOCK and f & os.O_NOFOLLOW for f in seen)
 
 
 def test_unsafe_existing_repo_config(upstream, repo, settings) -> None:

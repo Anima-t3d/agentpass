@@ -7,14 +7,16 @@ codes only; response bodies and the token never reach exceptions or logs.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Protocol
 
 from agentpass.gitmirror.fetch import FetchSettings, git_env
-from agentpass.gitmirror.validate import FetchRequest, HelperError
+from agentpass.gitmirror.validate import FetchRequest, HelperError, check_path_safe
 
 API_BASE = "https://api.github.com"
 _TIMEOUT_S = 4
@@ -94,6 +96,14 @@ def lookup_commit(req: FetchRequest, api: GitHubApi) -> dict:
 
 
 def _mirror_sha(req: FetchRequest, repo: Path, settings: FetchSettings) -> str | None:
+    # Same path checks as a fetch: git must never read a config someone else could write
+    trusted = settings.trusted_uids
+    check_path_safe(repo.parent, trusted)
+    check_path_safe(settings.home, trusted)
+    if not os.path.lexists(repo):
+        return None
+    check_path_safe(repo, trusted)
+    check_path_safe(repo / "config", trusted)
     if not repo.is_dir():
         return None
     proc = settings.run(
@@ -106,6 +116,8 @@ def _mirror_sha(req: FetchRequest, repo: Path, settings: FetchSettings) -> str |
             f"refs/heads/{req.branch}",
         ],
         env=git_env(settings),
+        cwd=settings.home,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,

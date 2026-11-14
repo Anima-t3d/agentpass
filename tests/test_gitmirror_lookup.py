@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import urllib.error
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,16 @@ def test_commit_malformed_is_internal() -> None:
 
 
 # ---- relation -------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _umask() -> Iterator[None]:
+    # The helper runs with umask 0027; a dev 0002 umask would make git create
+    # group-writable mirror dirs that the path-safety check rightly refuses.
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
 
 _ENV = {
     "PATH": "/usr/bin:/bin",
@@ -201,6 +212,26 @@ def test_rev_parse_failure_is_unknown(tmp_path: Path) -> None:
     assert out == UNKNOWN
 
 
+@pytest.mark.parametrize("target", ["parent", "home", "repo", "config"])
+def test_unsafe_path_is_unknown_without_running_git(tmp_path: Path, target: str) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o755)
+    repo, _ = mirror_with(root)
+    home = tmp_path / "home"
+    home.mkdir(mode=0o755)
+    path = {"parent": root, "home": home, "repo": repo, "config": repo / "config"}[target]
+    path.chmod(0o777 if path.is_dir() else 0o666)
+    calls: list[object] = []
+
+    def spy(*a: object, **k: object) -> None:
+        calls.append(a)
+        raise AssertionError("git must not run on an unsafe path")
+
+    out = lookup_relation(REQ, repo, FakeApi({}), settings(home, run=spy))
+    assert out == UNKNOWN
+    assert calls == []
+
+
 def test_keyboard_interrupt_not_swallowed(tmp_path: Path) -> None:
     repo, _ = mirror_with(tmp_path)
 
@@ -217,10 +248,13 @@ def test_rev_parse_uses_git_env_and_branch(tmp_path: Path) -> None:
 
     def spy(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
         seen["cmd"], seen["env"] = cmd, kw.get("env")
+        seen["stdin"], seen["cwd"] = kw.get("stdin"), kw.get("cwd")
         return subprocess.CompletedProcess(cmd, 1, "", "")
 
     out = lookup_relation(REQ, repo, FakeApi({}), settings(tmp_path, run=spy))
     assert out["state"] == "new"
+    assert seen["stdin"] == subprocess.DEVNULL
+    assert seen["cwd"] == tmp_path  # settings.home
     assert seen["cmd"] == [
         "git",
         f"--git-dir={repo}",

@@ -152,7 +152,8 @@ def _size(repo: Path) -> int:
 
 def _lock(repo: Path) -> int:
     path = repo.parent / f".{repo.name}.lock"
-    flags = os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    # O_NONBLOCK: a FIFO planted at this path cannot hang open(); flock does not care
+    flags = os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
     try:
         fd = os.open(path, flags, 0o640)
     except OSError as e:
@@ -172,6 +173,7 @@ def _lock(repo: Path) -> int:
 
 def fetch(req: FetchRequest, repo: Path, settings: FetchSettings) -> dict:
     started = time.monotonic()
+    check_path_safe(repo.parent, settings.trusted_uids)  # before creating the lock file there
     fd = _lock(repo)
     try:
         return _fetch_locked(req, repo, settings, started)
