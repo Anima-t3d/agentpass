@@ -55,6 +55,12 @@ agentpass/
 │   │   ├── verify.py         # Challenge construction + WebAuthn verification
 │   │   ├── store.py          # Enrolled public keys + enrolment tokens
 │   │   └── assets.py         # Page HTML, CSS (design tokens, light/dark) and JS; textContent only, no inline style
+│   ├── gitmirror/            # gh_mirror_fetch (docs/DESIGN.md 5.5)
+│   │   ├── plugin.py         # GitMirrorService (handler: python): one JSON line over the helper socket, never runs git
+│   │   ├── helper.py         # Socket-activated helper entry point (python -I -m agentpass.gitmirror.helper), runs as its own user
+│   │   ├── validate.py       # Request validation, allowlist, mirror path and ownership checks
+│   │   ├── fetch.py          # One-branch fetch into a bare mirror at the approved sha; token via env only
+│   │   └── lookup.py         # Commit and history lookups for the approval preview (read-only GitHub API)
 │   └── services/
 │       ├── base.py           # ServiceHandler ABC
 │       └── http.py           # Generic HTTP service (any API via YAML)
@@ -63,9 +69,12 @@ agentpass/
 │   ├── github.yaml           # GitHub tools (reads allow, writes ask, destructive deny), with previews
 │   ├── gmail.yaml            # Gmail tools; gmail_send_message has an email preview
 │   ├── calendar.yaml         # Calendar tools; create_event pins sendUpdates
-│   └── drive.yaml            # Drive tools
+│   ├── drive.yaml            # Drive tools
+│   └── git_mirror.yaml       # gh_mirror_fetch (python service, helper socket), preview with commit + history lookups
 ├── policy/
-│   └── github.yaml           # Shared rule set for the GitHub tools (extends: [github]); main/master writes denied by default
+│   ├── github.yaml           # Shared rule set for the GitHub tools (extends: [github]); main/master writes denied by default
+│   └── git_mirror.yaml       # gh_mirror_fetch asks (extends: [git_mirror])
+├── contrib/systemd/          # Example units for the git-mirror helper (agentgit.socket, agentgit@.service)
 ├── tests/                    # see pytest
 ├── specs/                    # Feature specs (dated)
 ├── config.example.yaml

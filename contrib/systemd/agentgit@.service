@@ -1,0 +1,39 @@
+# Example service for the git-mirror helper, started per connection by agentgit.socket.
+# Runs as its own system user with its own read-only GitHub token; never as the user
+# AgentPass runs as. stdin/stdout are the connected socket (one JSON line each way);
+# stderr goes to the journal with the token scrubbed.
+#
+# Expected host setup (root, once):
+#   - users/groups: agentgit (no login shell), agentgit-clients = {AgentPass user},
+#     agentgit-readers = {agent user, agentgit}
+#   - /srv/git-mirror root:root 0755; /srv/git-mirror/<owner> agentgit:agentgit-readers 2750
+#   - /etc/agentgit/repos root:root 0644, one owner/repo per line (# comments)
+#   - /etc/agentgit/token root:root 0600, a fine-grained token with Contents: read and
+#     Metadata: read on the mirrored repositories only
+#   - agentpass installed in /opt/agentpass/venv
+[Unit]
+Description=AgentPass git mirror helper (one connection)
+
+[Service]
+Type=simple
+User=agentgit
+Group=agentgit
+SupplementaryGroups=agentgit-readers
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+ExecStart=/opt/agentpass/venv/bin/python -I -m agentpass.gitmirror.helper
+LoadCredential=github-token:/etc/agentgit/token
+StateDirectory=agentgit
+UMask=0027
+RuntimeMaxSec=660
+MemoryMax=1G
+
+ProtectSystem=strict
+ReadWritePaths=/srv/git-mirror
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

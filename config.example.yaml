@@ -149,6 +149,20 @@ services:
   #   health: {method: GET, path: "/drive/v3/about?fields=user", expect_status: 200}
   #   tools: "tools/drive.yaml"
 
+  # Git mirror (tools/git_mirror.yaml, rules in policy/git_mirror.yaml: extends: [git_mirror]).
+  # gh_mirror_fetch updates a local read-only git mirror to one approved commit of one branch.
+  # The gateway never runs git and holds no token for it: a separate helper, running as its own
+  # user with its own read-only GitHub token, does the fetch and the preview lookups. AgentPass
+  # talks to it over a Unix socket (example units in contrib/systemd/, docs/DESIGN.md 5.5).
+  # The AgentPass user must be in the socket group (agentgit-clients in the example units).
+  # git_mirror:
+  #   url: "unix:///run/agentgit/helper.sock"
+  #   auth: {type: none}
+  #   handler: python
+  #   handler_class: "agentpass.gitmirror.plugin:GitMirrorService"
+  #   preview_lookups: true          # the helper serves the approval preview lookups
+  #   tools: "tools/git_mirror.yaml"
+
   # Example: Python plugin service (non-HTTP)
   # custom:
   #   url: "mqtt://broker.local"

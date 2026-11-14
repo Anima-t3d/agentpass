@@ -1,0 +1,10 @@
+# Rule set for the git mirror tool (tools/git_mirror.yaml).
+# Use it from an agent file:  extends: [git_mirror]
+#
+# Every mirror update asks: the approval shows the exact commit (sha, headline, author,
+# date), whether it is still the branch tip, and how it relates to what the mirror had,
+# with a warning when history was rewritten.
+rules:
+  - pattern: "gh_mirror_fetch(*)"
+    action: ask
+    description: "Updating the git mirror needs approval for the exact commit"
