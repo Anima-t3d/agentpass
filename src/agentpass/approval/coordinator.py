@@ -24,6 +24,7 @@ from agentpass.approval.channel import (
     ApprovalReason,
     ApprovalRequest,
     ChannelHandle,
+    ChannelUnavailable,
     NoChannelError,
 )
 from agentpass.db import Database
@@ -318,6 +319,9 @@ class ApprovalCoordinator:
             else:  # notify channels: tool, signature and arg_display only
                 req = replace(req, preview=None, agent_note=None)
             return await channel.send(req)
+        except ChannelUnavailable as e:
+            logger.info("Approval channel %s skipped %s: %s", channel.name, req.approval_id, e)
+            return None
         except Exception:
             logger.exception("Approval channel %s failed to send %s", channel.name, req.approval_id)
             return None

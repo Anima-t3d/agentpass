@@ -34,6 +34,7 @@ dependencies = [
     "pyyaml>=6.0,<7.0",
     "jinja2>=3.1.0,<4.0",
     "webauthn>=2.5.0,<3.0",
+    "cryptography>=42",
 ]
 
 [project.urls]
@@ -61,7 +62,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentpass = ["dashboard/templates/*.html"]
+agentpass = ["dashboard/templates/*.html", "passkey/static/*.mjs"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -90,3 +91,4 @@ known-first-party = ["agentpass"]
 [tool.ruff.lint.per-file-ignores]
 # Embedded CSS and JS: long lines are cheaper to read than wrapped ones
 "src/agentpass/passkey/assets.py" = ["E501"]
+"src/agentpass/passkey/pwa_views.py" = ["E501"]

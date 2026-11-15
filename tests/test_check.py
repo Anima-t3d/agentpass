@@ -405,3 +405,29 @@ def test_unknown_renderer_parameter_is_a_config_error(tmp_path):
 def test_clean_preview_block_passes(tmp_path):
     report = _preview_config(tmp_path, PREVIEW_TOOL % 'fields: [{label: Id, value: "{id}"}]')
     assert report.exit_code() == 0
+
+
+PUSH_BLOCK = (
+    "passkey: {enabled: true, rp_id: gate.example.org, origin: 'https://gate.example.org', "
+    "push: {enabled: true, subject: 'mailto:a@example.org', vapid_key_path: '%s'}}\n"
+)
+
+
+def test_push_enabled_without_vapid_key_warns(tmp_path):
+    key = tmp_path / "vapid.pem"
+    cfg, perms = write_setup(tmp_path, gateway_extra=PUSH_BLOCK % key)
+    report = check(cfg, perms, env={})
+    assert codes(report.warnings) == ["push-key-missing"] and not report.errors
+    msg = report.warnings[0].message
+    assert f"VAPID key {key} is missing" in msg
+    assert f"agentpass push init-keys --config {cfg}" in msg
+    key.write_text("pem")
+    assert check(cfg, perms, env={}).warnings == []
+
+
+def test_push_disabled_does_not_need_a_vapid_key(tmp_path):
+    extra = PUSH_BLOCK.replace("enabled: true, subject", "enabled: false, subject") % (
+        tmp_path / "none.pem"
+    )
+    report = check(*write_setup(tmp_path, gateway_extra=extra), env={})
+    assert report.warnings == [] and report.errors == []

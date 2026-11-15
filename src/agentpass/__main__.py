@@ -93,6 +93,7 @@ KNOWN_COMMANDS = {
     "agent",
     "auth",
     "passkey",
+    "push",
     "remembered",
     "check-config",
 }
@@ -264,6 +265,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     enroll_parser.add_argument("--config", default="config.yaml", help="Config file path")
 
+    push_parser = subparsers.add_parser("push", help="Manage Web Push for the approval app")
+    push_sub = push_parser.add_subparsers(dest="push_command", required=True)
+    init_keys_parser = push_sub.add_parser(
+        "init-keys", help="Create the VAPID key if missing and print its public key"
+    )
+    init_keys_parser.add_argument("--config", default="config.yaml", help="Config file path")
+
     remembered_parser = subparsers.add_parser(
         "remembered", help="List or revoke remembered Allow/Deny always rules"
     )
@@ -355,6 +363,31 @@ def run_passkey(args: argparse.Namespace) -> int:
         return 1
     print("Open this URL on your phone or Mac within 10 minutes (single use):")
     print(issue_enrolment_url(config))
+    return 0
+
+
+def run_push(args: argparse.Namespace) -> int:
+    """`push init-keys`: create the VAPID key (0600) if missing, print the public key only."""
+    from agentpass.passkey.page import PasskeyConfig
+    from agentpass.push.webpush import (
+        generate_vapid_key,
+        load_vapid_key,
+        public_key_b64,
+        save_vapid_key,
+    )
+
+    try:
+        path = PasskeyConfig.from_config_file(args.config).push.vapid_key_path
+        try:
+            key = load_vapid_key(path)
+        except FileNotFoundError:
+            key = generate_vapid_key()
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            save_vapid_key(key, path)
+    except (ConfigError, OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"VAPID public key: {public_key_b64(key)}")
     return 0
 
 
@@ -652,6 +685,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(run_remembered(args))
     elif args.command == "passkey":
         sys.exit(run_passkey(args))
+    elif args.command == "push":
+        sys.exit(run_push(args))
     elif args.command == "request":
         from agentpass.cli import run_request
 

@@ -8,7 +8,7 @@ from agentpass.passkey import assets
 from agentpass.passkey.page import CSP, DISPLAY_LIMIT, display_safe
 from agentpass.passkey.verify import approval_challenge
 from agentpass.preview import LookupNote, Preview, Section, Unavailable
-from tests.test_passkey import HOST, env  # noqa: F401
+from tests.test_passkey import env  # noqa: F401
 
 HOSTILE = "<img src=x onerror=alert(1)><script>alert(2)</script>\"'&"
 BIDI = "evil‮gpj.exe ⁦x⁩ \x00 \x1b[31m"
@@ -34,8 +34,7 @@ def _preview(**kw) -> Preview:
 
 
 async def _pending(env):  # noqa: F811
-    r = await env.client.get("/api/pending", headers={"Host": HOST})
-    return (await r.json())["pending"]
+    return await env.pending()
 
 
 async def _send(env, **kw):  # noqa: F811
@@ -115,8 +114,9 @@ async def test_preview_is_never_part_of_the_challenge(env):  # noqa: F811
 
 
 async def test_every_page_and_asset_carries_the_strict_headers(env):  # noqa: F811
+    await env.sign_in()
     for path in ("/", "/enroll", "/static/app.js", "/static/app.css", "/api/pending"):
-        r = await env.client.get(path, headers={"Host": HOST})
+        r = await env.get(path)
         assert r.status == 200, path
         assert r.headers["Content-Security-Policy"] == CSP
         assert r.headers["X-Frame-Options"] == "DENY"
@@ -124,7 +124,7 @@ async def test_every_page_and_asset_carries_the_strict_headers(env):  # noqa: F8
         assert r.headers["Referrer-Policy"] == "no-referrer"
         assert r.headers["Cache-Control"] == "no-store"
     assert "default-src 'none'" in CSP and "'unsafe-inline'" not in CSP
-    assert "unsafe-eval" not in CSP and "img-src" not in CSP  # images fall under 'none'
+    assert "unsafe-eval" not in CSP and "data:" not in CSP
 
 
 def test_script_never_parses_markup_or_runs_strings():
@@ -158,7 +158,7 @@ def test_html_has_no_inline_script_style_or_handlers_and_no_external_resources()
 def test_css_has_tokens_both_themes_reduced_motion_and_readable_sizes():
     css = assets.APP_CSS
     assert "--fs-sm:.875rem" in css and "--font:system-ui" in css and "--mono:" in css
-    assert "@media (prefers-color-scheme:dark)" in css
+    assert "@media (prefers-color-scheme:light)" in css
     assert "@media (prefers-reduced-motion:reduce)" in css
     assert ":focus-visible" in css and "position:sticky" in css
     sizes = [float(x) for x in re.findall(r"font-size:([\d.]+)rem", css)]

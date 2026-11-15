@@ -33,6 +33,7 @@ from agentpass.config import ConfigError
 from agentpass.db import Database
 from agentpass.passkey.channel import PasskeyChannel, issue_enrolment_url
 from agentpass.passkey.page import CSRF_COOKIE, FAILURE_LIMIT, PasskeyConfig
+from agentpass.passkey.session import SESSION_COOKIE
 from agentpass.passkey.store import EnrolmentTokens, PasskeyStore
 from agentpass.passkey.verify import approval_challenge, canonical_json
 
@@ -155,17 +156,55 @@ class Env:
             auth,
             csrf,
         )
+        self.session = ""  # agentpass_session token once signed in
+
+    def cookies(self, *, csrf=True, session=True) -> str:
+        # the Secure cookies are not replayed by the test client over http
+        parts = [f"{CSRF_COOKIE}={self.csrf}"] if csrf else []
+        if session and self.session:
+            parts.append(f"{SESSION_COOKIE}={self.session}")
+        return "; ".join(parts)
 
     @property
     def store(self) -> PasskeyStore:
         return self.channel.store
 
     async def post(self, path, body=None, *, origin=ORIGIN, headers=None, csrf=True):
-        h = {"Origin": origin, "Host": HOST, **(headers or {})}
-        if csrf:  # the Secure cookie is not replayed by the test client over http
+        h = {"Origin": origin, "Host": HOST}
+        if csrf:
             h["X-CSRF"] = self.csrf
-            h["Cookie"] = f"{CSRF_COOKIE}={self.csrf}"
+        if cookie := self.cookies(csrf=csrf):
+            h["Cookie"] = cookie
+        h.update(headers or {})
         return await self.client.post(path, json=body or {}, headers=h)
+
+    async def get(self, path, *, headers=None):
+        h = {"Host": HOST}
+        if cookie := self.cookies():
+            h["Cookie"] = cookie
+        h.update(headers or {})
+        return await self.client.get(path, headers=h)
+
+    async def login_assertion(self, **kw) -> dict:
+        r = await self.post("/api/login/options")
+        assert r.status == 200, await r.text()
+        return self.auth.assert_((await r.json())["challenge"], **kw)
+
+    async def sign_in(self):
+        """Enrol (if needed) and sign in, so the session cookie rides on later calls."""
+        if self.session:
+            return
+        if not self.store.list():
+            await self.enrol()
+        r = await self.post("/api/login", {"credential": await self.login_assertion()})
+        assert r.status == 200, await r.text()
+        self.session = r.cookies[SESSION_COOKIE].value
+
+    async def pending(self) -> list:
+        await self.sign_in()
+        r = await self.get("/api/pending")
+        assert r.status == 200, await r.text()
+        return (await r.json())["pending"]
 
     async def send(self, approval_id="a1", args=None, tool="gmail_send", ttl=300, **kw):
         req = Req(
@@ -335,13 +374,11 @@ async def test_enrol_rejects_bad_token_and_wrong_origin_registration(env):
 async def test_pending_list_shows_full_args(env):
     args = {"to": "a@b.c", "body": "x" * 500, "nested": {"k": [1, 2]}}
     await env.send("a1", args)
-    data = await (await env.client.get("/api/pending", headers={"Host": HOST})).json()
-    (item,) = data["pending"]
+    (item,) = await env.pending()
     assert item["args"] == args and item["agent"] == "hermes" and item["tool"] == "gmail_send"
     assert item["risk"] == "high" and item["expires_at"].endswith("Z")
     await env.channel.finalize("a1", None)
-    data = await (await env.client.get("/api/pending", headers={"Host": HOST})).json()
-    assert data["pending"] == []
+    assert await env.pending() == []
 
 
 # --- approval ---
@@ -566,6 +603,50 @@ def test_cli_enroll_prints_url(tmp_path, capsys):
     assert exc.value.code == 0
     assert f"{ORIGIN}/enroll?token=" in capsys.readouterr().out
     assert (tmp_path / "data" / "passkey-enroll.json").exists()
+
+
+def _push_cfg(tmp_path, extra=""):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        f"storage: {{type: sqlite, path: {tmp_path}/data/agentpass.db}}\n"
+        f"passkey: {{enabled: true, rp_id: {RP_ID}, origin: '{ORIGIN}'{extra}}}\n"
+    )
+    return cfg
+
+
+def test_push_init_keys_creates_0600_and_is_idempotent(tmp_path, capsys):
+    import stat
+
+    from agentpass.__main__ import main
+
+    cfg = _push_cfg(tmp_path)
+    key_path = tmp_path / "data" / "push-vapid.pem"
+    with pytest.raises(SystemExit) as exc:
+        main(["push", "init-keys", "--config", str(cfg)])
+    assert exc.value.code == 0
+    first = capsys.readouterr().out
+    assert first.startswith("VAPID public key: ")
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    pem = key_path.read_bytes()
+
+    with pytest.raises(SystemExit) as exc:
+        main(["push", "init-keys", "--config", str(cfg)])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == first
+    assert key_path.read_bytes() == pem
+
+
+def test_push_init_keys_never_prints_the_private_key(tmp_path, capsys):
+    from agentpass.__main__ import main
+
+    cfg = _push_cfg(tmp_path)
+    for _ in range(2):
+        with pytest.raises(SystemExit):
+            main(["push", "init-keys", "--config", str(cfg)])
+    captured = capsys.readouterr()
+    assert "PRIVATE KEY" not in captured.out + captured.err
+    assert len(captured.out.strip().splitlines()) == 2
+    assert all(line.startswith("VAPID public key: ") for line in captured.out.strip().splitlines())
 
 
 # --- through the real coordinator (no stub sink or answer class) ---

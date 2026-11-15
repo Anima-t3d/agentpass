@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 import jinja2
 from aiohttp import web
 
+from agentpass.dashboard.query import entry_to_dict, parse_filters
 from agentpass.dashboard.remembered_routes import setup_remembered
 from agentpass.db import Database
 from agentpass.remembered import RememberedService
@@ -24,69 +25,10 @@ _jinja2_key = web.AppKey("jinja2_env", jinja2.Environment)
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
-def _parse_filters(request: web.Request) -> dict[str, Any]:
-    """Extract filter params from query string."""
-    params = request.query
-    filters: dict[str, Any] = {}
-
-    if params.get("tool_name"):
-        filters["tool_name"] = params["tool_name"]
-    if params.get("decision"):
-        filters["decision"] = params["decision"]
-    if params.get("resolution"):
-        filters["resolution"] = params["resolution"]
-
-    if params.get("from"):
-        try:
-            dt = datetime.fromisoformat(params["from"]).replace(tzinfo=UTC)
-            filters["from_ts"] = dt.timestamp()
-        except ValueError:
-            pass
-    if params.get("to"):
-        try:
-            dt = datetime.fromisoformat(params["to"]).replace(tzinfo=UTC)
-            filters["to_ts"] = dt.timestamp()
-        except ValueError:
-            pass
-
-    try:
-        filters["per_page"] = max(1, min(200, int(params.get("per_page", 50))))
-    except ValueError:
-        filters["per_page"] = 50
-
-    try:
-        filters["page"] = max(1, int(params.get("page", 1)))
-    except ValueError:
-        filters["page"] = 1
-
-    return filters
-
-
-def _entry_to_dict(entry: Any) -> dict[str, Any]:
-    """Convert an AuditEntry to a JSON-serializable dict."""
-    return {
-        "request_id": entry.request_id,
-        "timestamp": entry.timestamp,
-        "tool_name": entry.tool_name,
-        "args": entry.args,
-        "signature": entry.signature,
-        "decision": entry.decision,
-        "resolution": entry.resolution,
-        "resolved_by": entry.resolved_by,
-        "resolved_at": entry.resolved_at,
-        "execution_result": entry.execution_result,
-        "agent_id": entry.agent_id,
-        "preview_digest": entry.preview_digest,
-        "preview_title": entry.preview_title,
-        "preview_status": entry.preview_status,
-        "agent_note": entry.agent_note,  # unverified text from the agent
-    }
-
-
 async def handle_api_log(request: web.Request) -> web.Response:
     """GET /audit/api/log — JSON audit log with filtering and pagination."""
     db: Database = request.app[_db_key]
-    filters = _parse_filters(request)
+    filters = parse_filters(request.query)
     per_page = filters.pop("per_page")
     page = filters.pop("page")
     offset = (page - 1) * per_page
@@ -96,7 +38,7 @@ async def handle_api_log(request: web.Request) -> web.Response:
 
     return web.json_response(
         {
-            "entries": [_entry_to_dict(e) for e in entries],
+            "entries": [entry_to_dict(e) for e in entries],
             "total": total,
             "page": page,
             "per_page": per_page,
@@ -116,7 +58,7 @@ async def handle_audit_page(request: web.Request) -> web.Response:
     """GET /audit/ — HTML dashboard page."""
     db: Database = request.app[_db_key]
     env: jinja2.Environment = request.app[_jinja2_key]
-    filters = _parse_filters(request)
+    filters = parse_filters(request.query)
     per_page = filters.pop("per_page")
     page = filters.pop("page")
     offset = (page - 1) * per_page

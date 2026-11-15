@@ -6,7 +6,9 @@ Approve. Agent bearer tokens are never consulted: the page has no notion of them
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import logging
 import secrets
 import time
@@ -36,8 +38,11 @@ from webauthn.helpers.structs import (
 
 from agentpass.approval.channel import Answer, AnswerStatus
 from agentpass.config import LOOPBACK_HOSTS, ConfigError
+from agentpass.dashboard.query import entry_to_dict, parse_filters
 from agentpass.models import AuditEntry
-from agentpass.passkey import assets
+from agentpass.passkey import assets, pwa_assets
+from agentpass.passkey.pwa_icons import ICONS
+from agentpass.passkey.session import SESSION_COOKIE, Session, SessionStore
 from agentpass.passkey.store import EnrolmentTokens, PasskeyStore
 from agentpass.passkey.verify import (
     AssertionRejected,
@@ -47,6 +52,7 @@ from agentpass.passkey.verify import (
     verify_registration,
 )
 from agentpass.preview.sanitize import escape_unsafe
+from agentpass.push.config import PushConfig
 
 logger = logging.getLogger("agentpass.passkey")
 
@@ -56,7 +62,8 @@ CSRF_COOKIE = "ap_csrf"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    "img-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
+    "form-action 'none'; frame-ancestors 'none'"
 )
 
 
@@ -68,6 +75,7 @@ class PasskeyConfig:
     rp_id: str = ""
     origin: str = ""
     store_path: str = ""  # default: <storage data dir>/passkeys.json
+    push: PushConfig = field(default_factory=PushConfig)
 
     @property
     def enroll_path(self) -> str:
@@ -85,6 +93,7 @@ class PasskeyConfig:
             rp_id=str(raw.get("rp_id", "")),
             origin=str(raw.get("origin", "")).rstrip("/"),
             store_path=str(raw.get("store_path") or Path(storage_path).parent / "passkeys.json"),
+            push=PushConfig.from_mapping(raw.get("push"), storage_path),
         )
         cfg.validate()
         return cfg
@@ -102,6 +111,9 @@ class PasskeyConfig:
         return cls.from_mapping(raw.get("passkey"), str(storage_path or "./data/agentpass.db"))
 
     def validate(self) -> None:
+        if self.push.enabled and not self.enabled:
+            raise ConfigError("passkey.push.enabled needs the passkey page (passkey.enabled)")
+        self.push.validate()
         if self.host not in LOOPBACK_HOSTS:
             raise ConfigError(f"passkey.host must be a loopback address, got: {self.host!r}")
         parts = urlsplit(self.origin)
@@ -194,6 +206,7 @@ class ApprovalPage:
         *,
         db: Any = None,
         clock: Callable[[], float] = time.time,
+        sessions: SessionStore | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -205,22 +218,40 @@ class ApprovalPage:
         self._failures: dict[str, deque[float]] = defaultdict(deque)
         self._reg_challenges: dict[str, bytes] = {}  # enrolment token -> challenge
         self._netloc = urlsplit(config.origin).netloc
+        self.sessions = sessions if sessions is not None else SessionStore(clock=clock)
+        self._route_hooks: list[Callable[[web.Application], None]] = []
+        # Exact paths whose writes skip the CSRF cookie check (host and Origin still apply).
+        self.csrf_exempt: set[str] = set()
+
+    def add_routes(self, fn: Callable[[web.Application], None]) -> None:
+        """Let another channel mount routes on this app; call before ``build_app``."""
+        self._route_hooks.append(fn)
 
     # --- app wiring ---
 
     def build_app(self) -> web.Application:
         app = web.Application(middlewares=[self._guard])
         app.router.add_get("/", self._index)
+        app.router.add_get("/a/{approval_id}", self._index)  # the shell; its script opens the card
         app.router.add_get("/enroll", self._enroll_page)
+        app.router.add_get("/manifest.webmanifest", self._manifest)
+        app.router.add_get("/sw.js", self._service_worker)
+        app.router.add_get("/icons/{name}", self._icon)
         app.router.add_get("/static/app.js", self._asset(assets.APP_JS, "text/javascript"))
         app.router.add_get("/static/app.css", self._asset(assets.APP_CSS, "text/css"))
         app.router.add_get("/api/session", self._session)
+        app.router.add_post("/api/login/options", self._login_options)
+        app.router.add_post("/api/login", self._login)
+        app.router.add_post("/api/logout", self._logout)
         app.router.add_get("/api/pending", self._list_pending)
+        app.router.add_get("/api/history", self._history)
         app.router.add_post("/api/approvals/{id}/challenge", self._challenge)
         app.router.add_post("/api/approvals/{id}/approve", self._approve)
         app.router.add_post("/api/approvals/{id}/deny", self._deny)
         app.router.add_post("/api/enroll/options", self._enroll_options)
         app.router.add_post("/api/enroll/verify", self._enroll_verify)
+        for add in self._route_hooks:
+            add(app)
         return app
 
     @web.middleware
@@ -232,10 +263,11 @@ class ApprovalPage:
             if request.method not in ("GET", "HEAD"):
                 if request.headers.get("Origin") != self.config.origin:
                     raise _http(403, "wrong origin")
-                cookie = request.cookies.get(CSRF_COOKIE, "")
-                header = request.headers.get("X-CSRF", "")
-                if not cookie or not hmac.compare_digest(cookie, header):
-                    raise _http(403, "csrf check failed")
+                if request.path not in self.csrf_exempt:
+                    cookie = request.cookies.get(CSRF_COOKIE, "")
+                    header = request.headers.get("X-CSRF", "")
+                    if not cookie or not hmac.compare_digest(cookie, header):
+                        raise _http(403, "csrf check failed")
             response = await handler(request)
         except web.HTTPException as exc:
             self._harden(exc)
@@ -249,7 +281,7 @@ class ApprovalPage:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
 
     # --- helpers ---
 
@@ -260,14 +292,15 @@ class ApprovalPage:
         forwarded = forwarded.split(",")[0].strip()
         return f"{forwarded} (via {peer})" if forwarded else peer
 
-    def _throttled(self, source: str) -> bool:
+    def throttled(self, source: str) -> bool:
+        """Whether `source` hit the failure limit in the window. Shared with the push routes."""
         window = self._failures[source]
         now = self.clock()
         while window and window[0] <= now - FAILURE_WINDOW:
             window.popleft()
         return len(window) >= FAILURE_LIMIT
 
-    async def _reject(
+    async def reject(
         self,
         request: web.Request,
         approval_id: str,
@@ -275,6 +308,10 @@ class ApprovalPage:
         pending: PendingApproval | None = None,
         status: int = 403,
     ) -> web.HTTPException:
+        """Count a failure for throttling, audit it as approval_rejected, return the error.
+
+        Shared with the push routes, so their refusals count towards the same limit.
+        """
         source = self.source(request)
         self._failures[source].append(self.clock())
         logger.warning("approval_rejected id=%s source=%s reason=%s", approval_id, source, reason)
@@ -311,6 +348,29 @@ class ApprovalPage:
     async def _index(self, _: web.Request) -> web.Response:
         return web.Response(text=assets.INDEX_HTML, content_type="text/html")
 
+    async def _manifest(self, _: web.Request) -> web.Response:
+        return web.Response(text=pwa_assets.MANIFEST_JSON, content_type="application/manifest+json")
+
+    async def _service_worker(self, _: web.Request) -> web.Response:
+        """The worker script, versioned by a hash of the shell so a new build replaces the cache.
+
+        ``no-cache`` makes the browser revalidate it on every update check.
+        """
+        digest = hashlib.sha256(
+            "\0".join((assets.INDEX_HTML, assets.APP_JS, assets.APP_CSS, pwa_assets.SW_JS)).encode()
+        ).hexdigest()[:12]
+        return web.Response(
+            text=pwa_assets.SW_JS.replace("__VERSION__", digest),
+            content_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    async def _icon(self, request: web.Request) -> web.Response:
+        body = ICONS.get(request.match_info["name"])
+        if body is None:
+            raise _http(404, "no such icon")
+        return web.Response(body=body, content_type="image/png")
+
     async def _enroll_page(self, _: web.Request) -> web.Response:
         return web.Response(text=assets.ENROLL_HTML, content_type="text/html")
 
@@ -323,9 +383,114 @@ class ApprovalPage:
         )
         return response
 
+    # --- sign-in ---
+
+    def enrolled(self, credential_id: str) -> bool:
+        """Whether the passkey is still enrolled. Removing it from the store revokes it."""
+        return bool(credential_id) and self.store.get(credential_id) is not None
+
+    def require_session(self, request: web.Request) -> Session:
+        """The caller's live page session, or a 401 ``{"error": "sign in"}``.
+
+        A session only opens read views. It never stands in for an approval's assertion.
+        It ends as soon as the passkey that opened it is no longer enrolled.
+        """
+        token = request.cookies.get(SESSION_COOKIE, "")
+        session = self.sessions.get(token)
+        if session is not None and not self.enrolled(session.credential_id):
+            self.sessions.drop(token)
+            session = None
+        if session is None:
+            raise web.HTTPUnauthorized(
+                text=json.dumps({"error": "sign in"}), content_type="application/json"
+            )
+        return session
+
+    async def _login_options(self, request: web.Request) -> web.Response:
+        if self.throttled(self.source(request)):
+            raise _http(429, "too many failed attempts")
+        creds = self.store.list()
+        if not creds:
+            raise _http(409, "no passkey enrolled")
+        options = generate_authentication_options(
+            rp_id=self.config.rp_id,
+            challenge=self.sessions.new_challenge(),
+            allow_credentials=[PublicKeyCredentialDescriptor(id=_b64d(c.id)) for c in creds],
+            user_verification=UserVerificationRequirement.REQUIRED,
+        )
+        return web.Response(text=options_to_json(options), content_type="application/json")
+
+    async def _login(self, request: web.Request) -> web.Response:
+        if self.throttled(self.source(request)):
+            raise _http(429, "too many failed attempts")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        credential = body.get("credential") if isinstance(body, dict) else None
+        challenge = client_challenge(credential)
+        # Only a challenge this page issued for sign-in, once and recently, is accepted, so
+        # neither an approval's assertion nor a replayed login assertion opens a session.
+        if challenge is None or not self.sessions.consume_challenge(challenge):
+            raise await self.reject(request, "login", "unknown or expired login challenge")
+        try:
+            verified = verify_approval_assertion(
+                self.store,
+                credential,
+                challenge=challenge,
+                rp_id=self.config.rp_id,
+                origin=self.config.origin,
+            )
+        except AssertionRejected as e:
+            raise await self.reject(request, "login", e.reason) from e
+        # A token the request already carried must not outlive the sign-in that replaces it.
+        self.sessions.drop(request.cookies.get(SESSION_COOKIE, ""))
+        token = self.sessions.create(verified.credential_id)
+        logger.info("passkey sign-in id=%s source=%s", verified.credential_id, self.source(request))
+        response = _json({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=self.sessions.absolute,
+            httponly=True,
+            secure=True,
+            samesite="Strict",
+            path="/",
+        )
+        return response
+
+    async def _logout(self, request: web.Request) -> web.Response:
+        self.sessions.drop(request.cookies.get(SESSION_COOKIE, ""))
+        response = _json({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE, "", max_age=0, httponly=True, secure=True, samesite="Strict", path="/"
+        )
+        return response
+
     # --- approvals ---
 
-    async def _list_pending(self, _: web.Request) -> web.Response:
+    async def _history(self, request: web.Request) -> web.Response:
+        """The audit log for the History tab: same filters and shape as the admin dashboard."""
+        self.require_session(request)
+        filters = parse_filters(request.query)
+        per_page, page = filters.pop("per_page"), filters.pop("page")
+        entries, total = [], 0
+        if self.db is not None:
+            entries, total = await self.db.get_audit_log_filtered(
+                limit=per_page, offset=(page - 1) * per_page, **filters
+            )
+        return _json(
+            {
+                "entries": [_history_entry(e) for e in entries],
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "pages": max(1, (total + per_page - 1) // per_page),
+            }
+        )
+
+    async def _list_pending(self, request: web.Request) -> web.Response:
+        self.require_session(request)
         now = self.clock()
         items = [
             {
@@ -363,13 +528,13 @@ class ApprovalPage:
     async def _approve(self, request: web.Request) -> web.Response:
         approval_id = request.match_info["id"]
         source = self.source(request)
-        if self._throttled(source):
+        if self.throttled(source):
             raise _http(429, "too many failed attempts")
         pending = self.pending.get(approval_id)
         if pending is None:
-            raise await self._reject(request, approval_id, "no such pending approval", None, 404)
+            raise await self.reject(request, approval_id, "no such pending approval", None, 404)
         if pending.expires_at <= self.clock():
-            raise await self._reject(request, approval_id, "approval expired", pending, 410)
+            raise await self.reject(request, approval_id, "approval expired", pending, 410)
         try:
             body = await request.json()
         except Exception:
@@ -384,7 +549,7 @@ class ApprovalPage:
                 origin=self.config.origin,
             )
         except AssertionRejected as e:
-            raise await self._reject(request, approval_id, e.reason, pending) from e
+            raise await self.reject(request, approval_id, e.reason, pending) from e
         return await self._deliver(
             pending,
             True,
@@ -429,12 +594,12 @@ class ApprovalPage:
 
     async def _enroll_options(self, request: web.Request) -> web.Response:
         source = self.source(request)
-        if self._throttled(source):
+        if self.throttled(source):
             raise _http(429, "too many failed attempts")
         body = await _body(request)
         token = body.get("token")
         if not isinstance(token, str) or not self.tokens.is_valid(token):
-            raise await self._reject(request, "enroll", "invalid or expired enrolment token")
+            raise await self.reject(request, "enroll", "invalid or expired enrolment token")
         options = generate_registration_options(
             rp_id=self.config.rp_id,
             rp_name="agentpass",
@@ -454,13 +619,13 @@ class ApprovalPage:
 
     async def _enroll_verify(self, request: web.Request) -> web.Response:
         source = self.source(request)
-        if self._throttled(source):
+        if self.throttled(source):
             raise _http(429, "too many failed attempts")
         body = await _body(request)
         token = body.get("token")
         challenge = self._reg_challenges.get(token) if isinstance(token, str) else None
         if challenge is None or not self.tokens.is_valid(token):
-            raise await self._reject(request, "enroll", "invalid or expired enrolment token")
+            raise await self.reject(request, "enroll", "invalid or expired enrolment token")
         label = body.get("label")
         try:
             cred = verify_registration(
@@ -471,9 +636,9 @@ class ApprovalPage:
                 label=label if isinstance(label, str) else "",
             )
         except AssertionRejected as e:
-            raise await self._reject(request, "enroll", e.reason) from e
+            raise await self.reject(request, "enroll", e.reason) from e
         if not self.tokens.consume(token):  # one winner if two submits race
-            raise await self._reject(request, "enroll", "invalid or expired enrolment token")
+            raise await self.reject(request, "enroll", "invalid or expired enrolment token")
         self._reg_challenges.pop(token, None)
         self.store.add(cred)
         logger.info("passkey enrolled id=%s source=%s", cred.id, source)
@@ -492,3 +657,25 @@ async def _body(request: web.Request) -> dict:
 
 def _b64d(value: str) -> bytes:
     return base64url_to_bytes(value)
+
+
+def _history_entry(entry: Any) -> dict[str, Any]:
+    """An audit row for the History tab: the dashboard shape without the call arguments.
+
+    The table shows the signature; the full arguments stay on the admin dashboard.
+    """
+    row = entry_to_dict(entry)
+    row.pop("args", None)
+    return row
+
+
+def client_challenge(credential: Any) -> bytes | None:
+    """The challenge the client says it signed, read from clientDataJSON.
+
+    Untrusted until the signature is verified; only used to look up a login challenge.
+    """
+    try:
+        client = json.loads(_b64d(credential["response"]["clientDataJSON"]))
+        return _b64d(client["challenge"])
+    except Exception:
+        return None

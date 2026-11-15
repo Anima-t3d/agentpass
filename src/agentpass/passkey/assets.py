@@ -6,10 +6,17 @@ agent or a device wrote can become markup. The CSP forbids inline styles, so sty
 by class only.
 """
 
+from agentpass.passkey import pwa_assets, pwa_views
+
 _HEAD = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0b1017" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f2f5f9" media="(prefers-color-scheme: light)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>%(title)s</title><link rel="stylesheet" href="/static/app.css"></head>
 """
 
@@ -24,17 +31,35 @@ INDEX_HTML = (
 """
     + _BRAND
     % {
-        "extra": '<span class="count" id="count" hidden></span>',
+        "extra": '<button class="btn btn-quiet signout" id="signout" type="button" hidden>Sign out</button>\n'
     }
     + """<main class="wrap" id="main">
-<h1 class="page-title">Approvals</h1>
+<div id="offline" class="offline" role="status" hidden></div>
 <div id="banner" role="alert"></div>
+<nav class="tabs" role="tablist" aria-label="Sections">
+<button class="tab" type="button" role="tab" id="tab-pending" aria-controls="panel-pending"
+aria-selected="true">Pending <span class="count" id="count" hidden></span></button>
+<button class="tab" type="button" role="tab" id="tab-history" aria-controls="panel-history"
+aria-selected="false" tabindex="-1">History</button>
+<button class="tab" type="button" role="tab" id="tab-devices" aria-controls="panel-devices"
+aria-selected="false" tabindex="-1">Devices</button>
+</nav>
+<section class="tabpanel" role="tabpanel" id="panel-pending" aria-labelledby="tab-pending">
 <div id="results" role="status" aria-live="polite"></div>
 <div id="list" aria-live="off" aria-busy="true">
 <div class="card skeleton" aria-hidden="true"><div class="sk sk-title"></div>
 <div class="sk sk-line"></div><div class="sk sk-line short"></div><div class="sk sk-box"></div></div>
 <p class="sr-only">Loading pending approvals</p>
 </div>
+</section>
+<section class="tabpanel" role="tabpanel" id="panel-history" aria-labelledby="tab-history" hidden>
+<h2 class="page-title">History</h2>
+<div class="card empty"><h2>Nothing here yet</h2><p>Past approvals will be listed here.</p></div>
+</section>
+<section class="tabpanel" role="tabpanel" id="panel-devices" aria-labelledby="tab-devices" hidden>
+<h2 class="page-title">Devices</h2>
+<div class="card empty"><h2>Nothing here yet</h2><p>Devices that can approve will be listed here.</p></div>
+</section>
 <noscript><p class="panel panel-warn">This page needs JavaScript to show and sign approvals.</p>
 </noscript>
 </main>
@@ -69,7 +94,8 @@ approve. Nothing is shared with the agent.</p>
 """
 )
 
-APP_CSS = r"""
+APP_CSS = (
+    r"""
 :root{
   color-scheme:light dark;
   --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -77,33 +103,33 @@ APP_CSS = r"""
   --fs-sm:.875rem;--fs-md:1rem;--fs-lg:1.125rem;--fs-xl:1.375rem;--fs-2xl:1.625rem;
   --s1:.25rem;--s2:.5rem;--s3:.75rem;--s4:1rem;--s5:1.5rem;--s6:2rem;--s7:3rem;
   --r-sm:6px;--r-md:12px;--r-lg:16px;--r-pill:999px;
-  --bg:#f2f5f9;--surface:#fff;--surface-2:#f5f7fa;--border:#d5dce7;--border-strong:#8d9bb0;
-  --text:#142033;--muted:#475569;
-  --primary:#1d4ed8;--primary-hover:#1a41b5;--on-primary:#fff;--focus:#1d4ed8;
-  --danger:#b42318;--danger-bg:#fdeceb;--danger-border:#e9a8a2;--danger-text:#9b1c13;
-  --warn-bg:#fff3d4;--warn-border:#e2b350;--warn-text:#744000;
-  --ok-bg:#e5f6ec;--ok-border:#86cba1;--ok-text:#0a5a2b;
-  --info-bg:#e7effd;--info-border:#a7c0f2;--info-text:#173f9c;
-  --note-bg:#f3efff;--note-border:#8f7bdc;--note-text:#2d205e;--note-label:#573bb5;
-  --add-bg:#e2f5e9;--add-text:#0a5a2b;--del-bg:#fde8e6;--del-text:#9b1c13;
-  --shadow-1:0 1px 2px rgba(20,32,51,.08),0 1px 3px rgba(20,32,51,.06);
-  --shadow-2:0 4px 12px rgba(20,32,51,.10),0 1px 3px rgba(20,32,51,.08);
-  --bar-shadow:0 -6px 16px rgba(20,32,51,.08);
+  --bg:#0b1017;--surface:#141c27;--surface-2:#1a2432;--border:#2a3748;--border-strong:#64768d;
+  --text:#e8eef6;--muted:#a6b5c8;
+  --primary:#7aa7ff;--primary-hover:#9dbfff;--on-primary:#08142e;--focus:#9dbfff;
+  --danger:#ff9a90;--danger-bg:#2b1517;--danger-border:#7d3530;--danger-text:#ffaba3;
+  --warn-bg:#2b2110;--warn-border:#7d5c1c;--warn-text:#f6c96f;
+  --ok-bg:#0f2a1b;--ok-border:#2b6b47;--ok-text:#7fe3ab;
+  --info-bg:#13233f;--info-border:#32528a;--info-text:#adc7ff;
+  --note-bg:#1d1836;--note-border:#6c5bab;--note-text:#e5ddff;--note-label:#cbbcff;
+  --add-bg:#0f2a1b;--add-text:#8be8b3;--del-bg:#2b1517;--del-text:#ffaba3;
+  --shadow-1:0 1px 2px rgba(0,0,0,.5);
+  --shadow-2:0 6px 16px rgba(0,0,0,.5);
+  --bar-shadow:0 -6px 16px rgba(0,0,0,.45);
 }
-@media (prefers-color-scheme:dark){
+@media (prefers-color-scheme:light){
   :root{
-    --bg:#0b1017;--surface:#141c27;--surface-2:#1a2432;--border:#2a3748;--border-strong:#64768d;
-    --text:#e8eef6;--muted:#a6b5c8;
-    --primary:#7aa7ff;--primary-hover:#9dbfff;--on-primary:#08142e;--focus:#9dbfff;
-    --danger:#ff9a90;--danger-bg:#2b1517;--danger-border:#7d3530;--danger-text:#ffaba3;
-    --warn-bg:#2b2110;--warn-border:#7d5c1c;--warn-text:#f6c96f;
-    --ok-bg:#0f2a1b;--ok-border:#2b6b47;--ok-text:#7fe3ab;
-    --info-bg:#13233f;--info-border:#32528a;--info-text:#adc7ff;
-    --note-bg:#1d1836;--note-border:#6c5bab;--note-text:#e5ddff;--note-label:#cbbcff;
-    --add-bg:#0f2a1b;--add-text:#8be8b3;--del-bg:#2b1517;--del-text:#ffaba3;
-    --shadow-1:0 1px 2px rgba(0,0,0,.5);
-    --shadow-2:0 6px 16px rgba(0,0,0,.5);
-    --bar-shadow:0 -6px 16px rgba(0,0,0,.45);
+    --bg:#f2f5f9;--surface:#fff;--surface-2:#f5f7fa;--border:#d5dce7;--border-strong:#8d9bb0;
+    --text:#142033;--muted:#475569;
+    --primary:#1d4ed8;--primary-hover:#1a41b5;--on-primary:#fff;--focus:#1d4ed8;
+    --danger:#b42318;--danger-bg:#fdeceb;--danger-border:#e9a8a2;--danger-text:#9b1c13;
+    --warn-bg:#fff3d4;--warn-border:#e2b350;--warn-text:#744000;
+    --ok-bg:#e5f6ec;--ok-border:#86cba1;--ok-text:#0a5a2b;
+    --info-bg:#e7effd;--info-border:#a7c0f2;--info-text:#173f9c;
+    --note-bg:#f3efff;--note-border:#8f7bdc;--note-text:#2d205e;--note-label:#573bb5;
+    --add-bg:#e2f5e9;--add-text:#0a5a2b;--del-bg:#fde8e6;--del-text:#9b1c13;
+    --shadow-1:0 1px 2px rgba(20,32,51,.08),0 1px 3px rgba(20,32,51,.06);
+    --shadow-2:0 4px 12px rgba(20,32,51,.10),0 1px 3px rgba(20,32,51,.08);
+    --bar-shadow:0 -6px 16px rgba(20,32,51,.08);
   }
 }
 *,*::before,*::after{box-sizing:border-box}
@@ -121,6 +147,7 @@ ul,ol{padding:0;list-style:none}
 
 .topbar{background:var(--surface);border-bottom:1px solid var(--border);
   padding-top:env(safe-area-inset-top)}
+.signout{margin-left:auto;min-height:36px}
 .topbar-in{max-width:40rem;margin:0 auto;padding:var(--s3) var(--s4);display:flex;
   align-items:center;justify-content:space-between;gap:var(--s3)}
 .brand{display:inline-flex;align-items:center;gap:var(--s2);font-weight:700;
@@ -311,8 +338,12 @@ details.raw>.args{margin:0 var(--s3) var(--s3)}
   .spinner{border-right-color:currentColor;border-style:dotted}
 }
 """
+    + pwa_assets.SHELL_CSS
+    + pwa_views.VIEWS_CSS
+)
 
-APP_JS = r"""
+APP_JS = (
+    r"""
 'use strict';
 const b64d = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')
   .padEnd(Math.ceil(s.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
@@ -381,7 +412,9 @@ async function api(path, body) {
 async function session() { csrf = (await api('/api/session')).csrf; }
 
 async function sign(id) {
-  const opts = await api('/api/approvals/' + id + '/challenge', {});
+  return assertWith(await api('/api/approvals/' + id + '/challenge', {}));
+}
+async function assertWith(opts) {
   opts.challenge = b64d(opts.challenge);
   opts.allowCredentials = (opts.allowCredentials || []).map((c) => ({...c, id: b64d(c.id)}));
   const c = await navigator.credentials.get({publicKey: opts});
@@ -591,8 +624,8 @@ function buildCard(p) {
 }
 
 function syncButtons(s) {
-  s.ok.disabled = s.busy || !s.confirmed || s.expired === true;
-  s.no.disabled = s.busy || s.expired === true;
+  s.ok.disabled = s.busy || netDown || !s.confirmed || s.expired === true;
+  s.no.disabled = s.busy || netDown || s.expired === true;
 }
 
 function say(s, panel) {
@@ -704,8 +737,48 @@ function render() {
   paintIcons(extra);
   const n = cards.size, count = document.getElementById('count');
   count.hidden = n === 0;
-  count.textContent = n + ' pending';
+  count.textContent = String(n);
+  count.setAttribute('aria-label', n + ' pending');
   document.title = (n ? '(' + n + ') ' : '') + 'agentpass approvals';
+}
+
+/* ---- sign-in: the session opens the list; every Approve still asks for the passkey ---- */
+let signingIn = false;
+function signInPanel(on, message) {
+  const b = document.getElementById('banner');
+  document.getElementById('signout').hidden = on;
+  if (!on) { if (b.querySelector('.signin')) b.replaceChildren(); return; }
+  if (b.querySelector('.signin') && !message) return;
+  const btn = h('button', {cls: 'btn btn-primary', type: 'button'}, icon('key'),
+    h('span', {text: 'Sign in with passkey'}));
+  btn.addEventListener('click', signIn);
+  b.replaceChildren(h('div', {cls: 'panel panel-info signin'}, icon('lock'),
+    h('div', null, h('div', {cls: 'panel-title', text: 'Sign in to see approvals'}),
+      h('div', {text: message || 'Use the passkey you enrolled on this device.'})), btn));
+}
+async function signOut() {
+  try { await api('/api/logout', {}); } catch (e) { /* offline: the 401 path below still cleans up */ }
+  await load();  // 401 now: clears the cards and shows the sign-in panel
+}
+document.getElementById('signout').addEventListener('click', signOut);
+async function signIn() {
+  if (signingIn) return;
+  signingIn = true;
+  try {
+    const credential = await assertWith(await api('/api/login/options', {}));
+    await api('/api/login', {credential});
+    signInPanel(false);
+    await load();
+  } catch (e) {
+    signInPanel(true, e && (e.name === 'NotAllowedError' || e.name === 'AbortError')
+      ? 'Passkey prompt cancelled. Try again.'
+      : e && e.status === 429 ? 'Too many failed attempts. Wait a few minutes.'
+        : e && e.status === 409
+          ? 'No passkey enrolled yet. Open an enrolment link from `agentpass passkey enroll` first.'
+        : 'Sign-in failed (' + ((e && (e.name || e.status)) || 'error') + ').');
+  } finally {
+    signingIn = false;
+  }
 }
 
 async function load() {
@@ -713,10 +786,21 @@ async function load() {
   try {
     data = await api('/api/pending');
   } catch (e) {
-    banner(true);
+    if (e && e.status === 401) {  // signed out or session expired: hide what we can't refresh
+      for (const c of cards.values()) c.el.remove();
+      cards.clear();
+      loaded = false;
+      render();
+      signInPanel(true);
+      return;
+    }
+    if (e && e.name === 'TypeError') offline(true); else banner(true);
     return;
   }
+  signInPanel(false);
   banner(false);
+  offline(false);
+  viewsSignedIn();
   enrolled = data.enrolled > 0;
   loaded = true;
   const list = document.getElementById('list');
@@ -735,6 +819,7 @@ async function load() {
     list.append(s.el);
   }
   render();
+  openDeepLink();
 }
 
 setInterval(() => {
@@ -805,3 +890,6 @@ session().then(() => {
   } else { banner(true); render(); }
 });
 """
+    + pwa_assets.SHELL_JS
+    + pwa_views.VIEWS_JS
+)

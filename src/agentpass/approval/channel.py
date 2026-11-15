@@ -37,6 +37,11 @@ class NoChannelError(Exception):
     """No channel accepted the approval request."""
 
 
+class ChannelUnavailable(RuntimeError):
+    """A channel cannot take this request for an expected reason (e.g. nothing to send
+    to). The coordinator skips it with one INFO line, no traceback."""
+
+
 @dataclass(frozen=True)
 class RememberOffer:
     """Which "always" answers a request may get (docs/REMEMBERED-DECISIONS.md section 3).
