@@ -34,13 +34,17 @@ SECTION_IDS = [
     "faq",
     "footer",
 ]
+# Generic markers of private or tool-generated content. Owner-specific terms (names,
+# hostnames) must never be committed, even in this test: put them one per line in the
+# gitignored tests/site/private_terms.txt and the test checks them too.
 DENYLIST = [
     "ts.net",
-    "gmail.com",
     "claude.ai/code",
     "Generated with Claude",
     "Claude-Session",
+    "@gmail.com",
 ]
+PRIVATE_TERMS_FILE = Path(__file__).with_name("private_terms.txt")
 UNRELEASED_TERMS = ["pwa", "push notification", "gh_mirror_fetch", "git mirror"]
 
 HEADLINE = "Let your AI agents act. Keep the keys."
@@ -236,11 +240,18 @@ def test_no_third_party_resources():
     assert not re.search(r"\bfetch\(|XMLHttpRequest|sendBeacon|import\(", load_js())
 
 
+def private_terms() -> list[str]:
+    if not PRIVATE_TERMS_FILE.exists():
+        return []
+    lines = PRIVATE_TERMS_FILE.read_text(encoding="utf-8").splitlines()
+    return [t.strip() for t in lines if t.strip() and not t.startswith("#")]
+
+
 def test_no_private_strings():
     for path in SITE.rglob("*"):
         if path.is_file():
             text = path.read_text(encoding="utf-8", errors="ignore").lower()
-            for term in DENYLIST:
+            for term in DENYLIST + private_terms():
                 assert term.lower() not in text, f"{term!r} in {path.relative_to(ROOT)}"
 
 
@@ -410,7 +421,8 @@ def section_text(ident: str) -> str:
 def test_quickstart_commands():
     text = section_text("quickstart")
     assert 'pip install "git+https://github.com/Anima-t3d/agentpass"' in text
-    assert "docker compose up" in text
+    # The compose file is a generic example without the isolation the page promises.
+    assert "docker compose" not in text
     assert not re.search(r"pip install agentpass(\s|$)", text)
 
 
@@ -496,3 +508,66 @@ def test_only_one_diagram_shows_per_width():
         sel == ".diagram .diagram-v" and decls(b).get("display") == "block"
         for sel, b in phone_rules
     )
+
+
+def quickstart_blocks() -> dict[str, str]:
+    """Raw text of the quickstart <pre> blocks, keyed by their first word."""
+    page = parse()
+    blocks = {}
+    for el in page.elements:
+        if el.tag == "pre" and "quickstart" in el.within:
+            raw = "".join(el.parts)
+            blocks[raw.split()[0].rstrip(":")] = raw
+    return blocks
+
+
+def test_quickstart_config_loads(tmp_path, monkeypatch):
+    from agentpass.config import load_config, load_permissions
+
+    for var in ("AGENT_TOKEN", "GUARDIAN_BOT_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.setenv(var, "dummy-" + var.lower())
+    blocks = quickstart_blocks()
+    (tmp_path / "tools").symlink_to(ROOT / "tools")
+    (tmp_path / "config.yaml").write_text(blocks["gateway"], encoding="utf-8")
+    (tmp_path / "permissions.yaml").write_text(blocks["defaults"], encoding="utf-8")
+    config = load_config(str(tmp_path / "config.yaml"))
+    assert "github" in config.services
+    load_permissions(str(tmp_path / "permissions.yaml"))
+
+
+def test_quickstart_denies_access_granting_tools():
+    # The page says these are denied; the quickstart rules must make that true.
+    from fnmatch import fnmatchcase
+
+    import yaml
+
+    rules = yaml.safe_load(quickstart_blocks()["defaults"])["rules"]
+    for sig in (
+        "gh_add_collaborator(acme/api, bob)",
+        "gh_create_deploy_key(acme/api)",
+        "gh_delete_deploy_key(acme/api)",
+        "gh_set_actions_secret(acme/api, TOKEN)",
+        "gh_update_branch_protection(acme/api, main)",
+        "gh_delete_repo(acme/api)",
+    ):
+        first = next((r for r in rules if fnmatchcase(sig, r["pattern"])), None)
+        assert first is not None and first["action"] == "deny", sig
+
+
+def test_quickstart_has_root_prerequisites():
+    text = section_text("quickstart")
+    assert "useradd" in text and "groupadd agentpass-clients" in text
+    assert "/run/agentpass" in text
+    assert any("DESIGN.md" in h for _, h in parse().links_in("quickstart"))
+
+
+def test_hero_signature_matches_tool():
+    import yaml
+
+    tools = yaml.safe_load((ROOT / "tools" / "github.yaml").read_text(encoding="utf-8"))
+    template = tools["tools"]["gh_create_issue_comment"]["signature"]
+    expected = (
+        "gh_create_issue_comment(" + template.format(owner="acme", repo="api", number=42) + ")"
+    )
+    sig = next(e for e in parse().elements if "signature" in e.classes)
+    assert sig.text == expected

@@ -48,7 +48,7 @@
               <span class="status status-pending">Waiting for you</span>
               <span class="status status-done">Approved</span>
             </div>
-            <p class="signature">gh_create_issue_comment(acme/api#42)</p>
+            <p class="signature">gh_create_issue_comment(acme/api, 42)</p>
             <div class="preview">
               <div class="preview-head">Preview, built by the gateway from GitHub</div>
               <div class="preview-body">
@@ -285,21 +285,35 @@
     <section class="section" id="quickstart" aria-labelledby="quickstart-title">
       <div class="container">
         <h2 id="quickstart-title">Get started</h2>
-        <p class="lede">Run the gateway on a machine you trust, such as a home server, a NAS or a VPS. Your agent can run on the same machine as another user, or elsewhere.</p>
+        <p class="lede">Run the gateway on a Linux machine you trust, such as a home server, a NAS or a VPS, as its own user. Your agent runs as a different user on the same machine.</p>
         <ol class="qs">
           <li>
+            <h3>Prepare the machine</h3>
+            <p>As root: a service user for the gateway, a group for the agents allowed to connect, and a directory for the socket. Replace <code>your-agent-user</code> with the user your agent runs as.</p>
+            <pre><code>useradd --system --create-home --home-dir /var/lib/agentpass --shell /usr/sbin/nologin agentpass
+chmod 700 /var/lib/agentpass
+groupadd agentpass-clients
+usermod -aG agentpass-clients agentpass
+usermod -aG agentpass-clients your-agent-user
+install -d -o agentpass -g agentpass -m 0755 /run/agentpass</code></pre>
+            <p><code>/run</code> is emptied on reboot; a systemd unit with <code>RuntimeDirectory=agentpass</code> recreates it. The <a href="https://github.com/Anima-t3d/agentpass/blob/main/docs/DESIGN.md">design doc</a> has the full layout and service hardening.</p>
+          </li>
+          <li>
             <h3>Install</h3>
-            <p>The tool and policy files live in the repository, so clone it on the gateway:</p>
-            <pre><code>git clone https://github.com/Anima-t3d/agentpass
-cd agentpass
+            <p>As the service user, so the agent can't read anything you put here:</p>
+            <pre><code>sudo -u agentpass -H bash
+cd ~ &amp;&amp; git clone https://github.com/Anima-t3d/agentpass &amp;&amp; cd agentpass
+python3 -m venv .venv &amp;&amp; . .venv/bin/activate
 pip install .</code></pre>
             <p>On the agent's side you only need the client:</p>
             <pre><code>pip install "git+https://github.com/Anima-t3d/agentpass"</code></pre>
           </li>
           <li>
             <h3>Configure</h3>
-            <p>Put <code>AGENT_TOKEN</code>, <code>GUARDIAN_BOT_TOKEN</code> and <code>GITHUB_TOKEN</code> in <code>.env</code>, then write <code>config.yaml</code>:</p>
-            <pre><code>listen:
+            <p>Put <code>AGENT_TOKEN</code>, <code>GUARDIAN_BOT_TOKEN</code> and <code>GITHUB_TOKEN</code> in <code>.env</code> (<code>chmod 600 .env</code>), then write <code>config.yaml</code>:</p>
+            <pre><code>gateway: {}
+
+listen:
   socket: /run/agentpass/agent.sock
   group: agentpass-clients
 
@@ -322,7 +336,7 @@ services:
 storage:
   type: sqlite
   path: "./data/agentpass.db"</code></pre>
-            <p>And <code>permissions.yaml</code>: reads go through, everything else asks, deletes never happen.</p>
+            <p>And <code>permissions.yaml</code>: reads go through, everything else asks, and nothing that deletes or hands out access ever runs.</p>
             <pre><code>defaults:
   - pattern: "gh_get_*"
     action: allow
@@ -333,18 +347,26 @@ storage:
 
 rules:
   - pattern: "gh_delete_*"
+    action: deny
+  - pattern: "gh_add_collaborator*"
+    action: deny
+  - pattern: "gh_*_deploy_key*"
+    action: deny
+  - pattern: "gh_set_actions_secret*"
+    action: deny
+  - pattern: "gh_update_branch_protection*"
     action: deny</code></pre>
           </li>
           <li>
             <h3>Check and start</h3>
-            <pre><code>agentpass check-config --config config.yaml
+            <pre><code>set -a; . ./.env; set +a
+agentpass check-config --config config.yaml
 agentpass serve --config config.yaml --permissions permissions.yaml</code></pre>
-            <p>Then, from the agent's user:</p>
+            <p>Then, as the agent's user:</p>
             <pre><code>agentpass tools --socket /run/agentpass/agent.sock --token "$AGENT_TOKEN"</code></pre>
           </li>
         </ol>
-        <p class="after">Prefer containers? The repository has a <code>docker-compose.yml</code>: add your <code>config.yaml</code>, <code>permissions.yaml</code> and <code>.env</code>, then run <code>docker compose up -d</code>.</p>
-        <p>Next: <a href="https://github.com/Anima-t3d/agentpass#readme">the README</a> covers passkeys, MCP, previews and Google accounts; <a href="https://github.com/Anima-t3d/agentpass/tree/main/docs">the docs</a> go deeper.</p>
+        <p class="after">Next: <a href="https://github.com/Anima-t3d/agentpass#readme">the README</a> covers passkeys, MCP, previews and Google accounts; <a href="https://github.com/Anima-t3d/agentpass/tree/main/docs">the docs</a> go deeper.</p>
       </div>
     </section>
 
@@ -418,7 +440,7 @@ agentpass serve --config config.yaml --permissions permissions.yaml</code></pre>
           </details>
           <details>
             <summary>Who makes AgentPass?</summary>
-            <div><p>AgentPass was created by Torben Wetter and is developed in the open on GitHub. Issues and contributions are welcome.</p></div>
+            <div><p>AgentPass was created by Torben Wetter and is developed in the open on GitHub. Contributions are welcome as pull requests.</p></div>
           </details>
         </div>
       </div>

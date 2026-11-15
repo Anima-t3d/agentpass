@@ -43,3 +43,6 @@ Thumbs.db
 htmlcov/
 
 !AGENTS.md
+
+# Owner-specific terms for tests/site (never committed)
+tests/site/private_terms.txt

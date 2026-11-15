@@ -37,10 +37,11 @@ Not published (the Pages workflow removes this file). Keep it in step with `inde
 | `agentpass check-config` offline check | `features` | `src/agentpass/check.py` |
 | Threat model: protects against token reads, self-approval, own-permission changes, audit tampering; not root, operator phone/passkey, malicious service | `security` | `docs/DESIGN.md` |
 | Previews come from the gateway, so the approval shows what will run | `security` | `docs/APPROVAL-PREVIEWS.md` |
-| Install by clone + `pip install .`; client via pip from git | `quickstart` | `pyproject.toml` |
-| Minimal config: socket listener, agent token, Telegram, GitHub service, SQLite | `quickstart` | `config.example.yaml`, `README.md` |
+| Install by clone + venv + `pip install .`; client via pip from git | `quickstart` | `pyproject.toml` |
+| Root prerequisites: service user, `agentpass-clients` group, socket dir | `quickstart` | `src/agentpass/listen.py`, `docs/DESIGN.md` |
+| Quickstart deny rules for deletes and access-granting tools | `quickstart` | `policy/github.yaml`, `src/agentpass/config.py` |
+| Minimal config (`gateway: {}` required): socket listener, agent token, Telegram, GitHub service, SQLite | `quickstart` | `config.example.yaml`, `README.md` |
 | `check-config`, `serve --config --permissions`, `tools --socket --token` | `quickstart` | `src/agentpass/__main__.py`, `src/agentpass/cli.py` |
-| `docker compose up -d` with config, permissions and .env | `quickstart` | `docker-compose.yml` |
 | CLI, Python SDK, MCP endpoint, OpenClaw skill | `faq` | `src/agentpass/cli.py`, `src/agentpass/client.py`, `src/agentpass/mcp.py`, `skills/openclaw/SKILL.md` |
 | Unanswered request times out (15 min default) and isn't run | `faq` | `src/agentpass/approval/coordinator.py`, `src/agentpass/pipeline.py`, `config.example.yaml` |
 | Python plugin services for non-HTTP APIs | `faq` | `README.md` |
