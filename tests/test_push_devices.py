@@ -229,6 +229,16 @@ async def test_device_list_hides_keys(env):
     assert (await env.call("GET", "/api/push/devices", session=False)).status == 401
 
 
+async def test_label_is_clipped_before_escaping_and_never_cut_mid_escape(env):
+    device_id, _ = await env.subscribe(label="x" * 58 + "\u202e" * 5 + "tail")
+    label = (await env.db.get_push_device(device_id)).label
+    assert len(label) <= 60
+    assert label == "x" * 58  # the 60-char clip keeps two bidi marks; neither escape fits
+    device_id, _ = await env.subscribe(label="x" * 50 + "\u202e" + "y" * 40)
+    label = (await env.db.get_push_device(device_id)).label
+    assert label == "x" * 50 + "\\u202e" + "y" * 4 and len(label) == 60
+
+
 async def test_rename_device(env):
     device_id, _ = await env.subscribe(label="old")
     r = await env.call("PATCH", f"/api/push/devices/{device_id}", {"label": " Pixel‮ 8 " + "x" * 80})

@@ -71,7 +71,20 @@ def default_label(user_agent: str) -> str:
 
 
 def _clean_label(value: str) -> str:
-    return escape_unsafe(value.strip())[:LABEL_LIMIT].strip()
+    """Clip to the limit, escape control and bidi characters, and keep the result within it.
+
+    Escaping lengthens a character (``\\u202e``), so characters are escaped one by one and
+    dropped from the end once the limit is reached: no escape sequence is ever cut in half.
+    """
+    out: list[str] = []
+    size = 0
+    for ch in value.strip()[:LABEL_LIMIT]:
+        piece = escape_unsafe(ch)
+        if size + len(piece) > LABEL_LIMIT:
+            break
+        out.append(piece)
+        size += len(piece)
+    return "".join(out).strip()
 
 
 def _key_bytes(value: Any, length: int) -> bool:
