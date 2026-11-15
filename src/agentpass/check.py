@@ -457,6 +457,22 @@ def _lint_previews(config: Config, registry: ToolRegistry, report: Report) -> No
             )
 
 
+def _lint_push_key(config: Config, report: Report, cfg_file: Path) -> None:
+    """Push enabled without a readable VAPID key leaves the push channel unhealthy."""
+    push = getattr(config.passkey, "push", None)
+    if push is None or not push.enabled:
+        return
+    path = Path(push.vapid_key_path)
+    if path.is_file() and os.access(path, os.R_OK):
+        return
+    report.warn(
+        "push-key-missing",
+        "passkey.push.vapid_key_path",
+        f"push is enabled but the VAPID key {path} is missing; run "
+        f"`agentpass push init-keys --config {cfg_file}` as the gateway user",
+    )
+
+
 def _lint_health_and_dashboard(config: Config, report: Report) -> None:
     """healthz port must not hit a reserved port; the dashboard on TCP needs auth and warns."""
     reserved = set(config.gateway.reserved_ports)
@@ -530,6 +546,7 @@ def check(config_path: str, permissions_path: str, env: dict[str, str] | None = 
     if config is not None:
         _lint_listen(config, report)
         _lint_health_and_dashboard(config, report)
+        _lint_push_key(config, report, cfg_file)
 
     agents: list[AgentIdentity] = []
     if config is not None:
