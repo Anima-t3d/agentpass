@@ -6,6 +6,7 @@ Approve. Agent bearer tokens are never consulted: the page has no notion of them
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -38,7 +39,8 @@ from webauthn.helpers.structs import (
 from agentpass.approval.channel import Answer, AnswerStatus
 from agentpass.config import LOOPBACK_HOSTS, ConfigError
 from agentpass.models import AuditEntry
-from agentpass.passkey import assets
+from agentpass.passkey import assets, pwa_assets
+from agentpass.passkey.pwa_icons import ICONS
 from agentpass.passkey.session import SESSION_COOKIE, Session, SessionStore
 from agentpass.passkey.store import EnrolmentTokens, PasskeyStore
 from agentpass.passkey.verify import (
@@ -58,7 +60,8 @@ CSRF_COOKIE = "ap_csrf"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    "img-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
+    "form-action 'none'; frame-ancestors 'none'"
 )
 
 
@@ -215,7 +218,11 @@ class ApprovalPage:
     def build_app(self) -> web.Application:
         app = web.Application(middlewares=[self._guard])
         app.router.add_get("/", self._index)
+        app.router.add_get("/a/{approval_id}", self._index)  # the shell; its script opens the card
         app.router.add_get("/enroll", self._enroll_page)
+        app.router.add_get("/manifest.webmanifest", self._manifest)
+        app.router.add_get("/sw.js", self._service_worker)
+        app.router.add_get("/icons/{name}", self._icon)
         app.router.add_get("/static/app.js", self._asset(assets.APP_JS, "text/javascript"))
         app.router.add_get("/static/app.css", self._asset(assets.APP_CSS, "text/css"))
         app.router.add_get("/api/session", self._session)
@@ -256,7 +263,7 @@ class ApprovalPage:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
 
     # --- helpers ---
 
@@ -317,6 +324,29 @@ class ApprovalPage:
 
     async def _index(self, _: web.Request) -> web.Response:
         return web.Response(text=assets.INDEX_HTML, content_type="text/html")
+
+    async def _manifest(self, _: web.Request) -> web.Response:
+        return web.Response(text=pwa_assets.MANIFEST_JSON, content_type="application/manifest+json")
+
+    async def _service_worker(self, _: web.Request) -> web.Response:
+        """The worker script, versioned by a hash of the shell so a new build replaces the cache.
+
+        ``no-cache`` makes the browser revalidate it on every update check.
+        """
+        digest = hashlib.sha256(
+            "\0".join((assets.INDEX_HTML, assets.APP_JS, assets.APP_CSS, pwa_assets.SW_JS)).encode()
+        ).hexdigest()[:12]
+        return web.Response(
+            text=pwa_assets.SW_JS.replace("__VERSION__", digest),
+            content_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    async def _icon(self, request: web.Request) -> web.Response:
+        body = ICONS.get(request.match_info["name"])
+        if body is None:
+            raise _http(404, "no such icon")
+        return web.Response(body=body, content_type="image/png")
 
     async def _enroll_page(self, _: web.Request) -> web.Response:
         return web.Response(text=assets.ENROLL_HTML, content_type="text/html")
@@ -381,6 +411,8 @@ class ApprovalPage:
             )
         except AssertionRejected as e:
             raise await self._reject(request, "login", e.reason) from e
+        # A token the request already carried must not outlive the sign-in that replaces it.
+        self.sessions.drop(request.cookies.get(SESSION_COOKIE, ""))
         token = self.sessions.create(verified.credential_id)
         logger.info("passkey sign-in id=%s source=%s", verified.credential_id, self.source(request))
         response = _json({"ok": True})

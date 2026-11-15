@@ -124,7 +124,7 @@ async def test_every_page_and_asset_carries_the_strict_headers(env):  # noqa: F8
         assert r.headers["Referrer-Policy"] == "no-referrer"
         assert r.headers["Cache-Control"] == "no-store"
     assert "default-src 'none'" in CSP and "'unsafe-inline'" not in CSP
-    assert "unsafe-eval" not in CSP and "img-src" not in CSP  # images fall under 'none'
+    assert "unsafe-eval" not in CSP and "data:" not in CSP
 
 
 def test_script_never_parses_markup_or_runs_strings():
@@ -158,7 +158,7 @@ def test_html_has_no_inline_script_style_or_handlers_and_no_external_resources()
 def test_css_has_tokens_both_themes_reduced_motion_and_readable_sizes():
     css = assets.APP_CSS
     assert "--fs-sm:.875rem" in css and "--font:system-ui" in css and "--mono:" in css
-    assert "@media (prefers-color-scheme:dark)" in css
+    assert "@media (prefers-color-scheme:light)" in css
     assert "@media (prefers-reduced-motion:reduce)" in css
     assert ":focus-visible" in css and "position:sticky" in css
     sizes = [float(x) for x in re.findall(r"font-size:([\d.]+)rem", css)]
