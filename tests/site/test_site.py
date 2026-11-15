@@ -457,3 +457,42 @@ def test_pages_workflow():
     for s in steps:
         if "uses" in s:
             assert re.search(r"@(v\d+(\.\d+)*|[0-9a-f]{40})$", s["uses"]), s["uses"]
+
+
+def test_grid_items_holding_code_can_shrink():
+    # A grid item defaults to min-width: auto, so a long <pre> inside it widens the
+    # page on a phone instead of scrolling inside itself (found at 360 px: 658 px wide).
+    rules = css_rules(load_css())
+    shrinkable = [sel for sel, body in rules if decls(body).get("min-width") == "0"]
+    for container in (".qs > li", ".columns > *", ".pain .container > *", ".hero .container > *"):
+        assert any(container in [s.strip() for s in sel.split(",")] for sel in shrinkable), (
+            container
+        )
+
+
+def test_hero_card_layout_holds_during_animation():
+    rules = {sel: decls(body) for sel, body in css_rules(load_css())}
+    # <figure> has 40 px default side margins, which squeeze the card on a phone.
+    assert rules.get(".illustration", {}).get("margin") == "0"
+    # Expanding sections must clip while they animate, or they spill over the buttons.
+    expanding = next(d for sel, d in rules.items() if "html.js .approval .agent-note" in sel)
+    assert expanding.get("overflow") == "hidden"
+
+
+def test_only_one_diagram_shows_per_width():
+    # `.diagram svg { display: block }` outranks a bare `.diagram-h`, so the hide rules
+    # must be at least as specific or a phone shows both diagrams.
+    css = load_css()
+    rules = css_rules(css)
+    assert any(
+        sel == ".diagram .diagram-v" and decls(b).get("display") == "none" for sel, b in rules
+    )
+    phone = css_block(css, r"@media\s*\(\s*max-width:\s*640px\s*\)")
+    phone_rules = css_rules(phone)
+    assert any(
+        sel == ".diagram .diagram-h" and decls(b).get("display") == "none" for sel, b in phone_rules
+    )
+    assert any(
+        sel == ".diagram .diagram-v" and decls(b).get("display") == "block"
+        for sel, b in phone_rules
+    )
