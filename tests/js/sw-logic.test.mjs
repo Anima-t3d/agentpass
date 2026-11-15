@@ -19,6 +19,12 @@ test('notificationFor: tag, interaction, actions, data', () => {
   assert.deepEqual(options.data, p);
 });
 
+test('notificationFor: a require telegram request has no Approve action', () => {
+  const {options} = sw.notificationFor(payload({require: 'telegram', one_tap: true}));
+  assert.deepEqual(options.actions, [{action: 'deny', title: 'Deny'}]);
+  assert.equal(options.data.approval_id, 'a1');  // the body tap still opens the app
+});
+
 test('decideClick matrix', () => {
   for (const oneTap of [true, false]) {
     const p = payload({one_tap: oneTap});
@@ -55,6 +61,11 @@ test('resolvedText', () => {
   assert.match(sw.resolvedText({approved: true}), /approved/i);
   assert.match(sw.resolvedText({approved: false, reason: 'timeout'}), /denied|expired|timed out/i);
   assert.match(sw.resolvedText({approved: false}), /denied/i);
+  for (const reason of ['restart', 'gateway_shutdown', 'no_channel', 'rejected_proof']) {
+    assert.equal(sw.resolvedText({approved: false, reason}), 'Cancelled by the gateway');
+  }
+  assert.equal(sw.resolvedText({approved: false, reason: 'denied'}), 'Denied elsewhere');
+  assert.equal(sw.resolvedText({approved: false, reason: 'expired'}), 'Expired. The agent was told no.');
 });
 
 // --- worker wiring with stubbed self / caches / fetch ---
@@ -119,6 +130,21 @@ test('an /api/* fetch never reaches the cache', async () => {
 test('a navigation is cached under / (control for the API test)', async () => {
   const h = harness({fetchImpl: async () => new Response('<html>')});
   await dispatchFetch(h, 'https://gate.example/a/x', {mode: 'navigate'});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(h.cache.puts.map((p) => p[0]), ['/']);
+});
+
+test('only / and /a/<id> navigations are cached; others are network-only', async () => {
+  for (const path of ['/enroll?token=secret', '/dashboard', '/other']) {
+    const h = harness({fetchImpl: async () => new Response('<html>enroll')});
+    const res = await dispatchFetch(h, 'https://gate.example' + path, {mode: 'navigate'});
+    assert.equal(await res.text(), '<html>enroll');
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(h.cache.puts, [], path);
+    assert.deepEqual(h.opened, [], path);
+  }
+  const h = harness({fetchImpl: async () => new Response('<html>')});
+  await dispatchFetch(h, 'https://gate.example/', {mode: 'navigate'});
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(h.cache.puts.map((p) => p[0]), ['/']);
 });

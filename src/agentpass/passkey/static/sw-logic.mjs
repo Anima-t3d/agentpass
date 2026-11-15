@@ -16,21 +16,25 @@ const ACTION_URL = '/api/push/action';
 const SYNC_TAG = 'agentpass-actions';
 const DB_NAME = 'agentpass';
 const STORE_NAME = 'actions';
+const SYSTEM_REASONS = ['restart', 'gateway_shutdown', 'no_channel', 'rejected_proof'];
 const RESOLVED_SHOWN_MS = 4000;
 
 const isApi = (url) => url.pathname.startsWith('/api/');
-const isNavigation = (req, url) =>
-  req.mode === 'navigate' || url.pathname === '/' || url.pathname.startsWith('/a/');
+const isShellPage = (url) => url.pathname === '/' || url.pathname.startsWith('/a/');
+const isNavigation = (req, url) => req.mode === 'navigate' || isShellPage(url);
 const appUrl = (payload) => '/a/' + encodeURIComponent(payload.approval_id);
 
 export function notificationFor(payload) {
+  // A require: telegram rule can never be approved from a notification: Deny only.
+  const actions = [{action: 'deny', title: 'Deny'}];
+  if (payload.require !== 'telegram') actions.unshift({action: 'approve', title: 'Approve'});
   return {
     title: payload.title,
     options: {
       body: payload.body,
       tag: payload.approval_id,
       requireInteraction: true,
-      actions: [{action: 'approve', title: 'Approve'}, {action: 'deny', title: 'Deny'}],
+      actions,
       data: payload,
     },
   };
@@ -55,6 +59,7 @@ export function queueDecision(item, now) {
 
 export function resolvedText(payload) {
   if (payload.approved) return 'Approved elsewhere';
+  if (SYSTEM_REASONS.includes(payload.reason)) return 'Cancelled by the gateway';
   return payload.reason === 'timeout' || payload.reason === 'expired'
     ? 'Expired. The agent was told no.' : 'Denied elsewhere';
 }
@@ -236,9 +241,15 @@ export function setup(self, env) {
       event.respondWith(env.fetch(req));
       return;
     }
-    if (isNavigation(req, url)) {  // the shell is one document for / and /a/<id>
+    if (isNavigation(req, url)) {
+      if (!isShellPage(url)) {  // /enroll?token=... and the like: network only, never cached
+        event.respondWith(env.fetch(req));
+        return;
+      }
+      // the shell is one document for / and /a/<id>
       event.respondWith(env.fetch(req).then((res) => {
-        if (res.ok) {
+        // Only the static shell is cached: /enroll?token=... and the like are network-only.
+        if (res.ok && (url.pathname === '/' || url.pathname.startsWith('/a/'))) {
           const copy = res.clone();
           env.caches.open(CACHE).then((cache) => cache.put('/', copy));
         }
