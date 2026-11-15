@@ -309,6 +309,25 @@ async def test_second_device_token_refused_after_resolution(env):
     assert r.status == 410 and await r.json() == {"error": "already resolved"}
 
 
+async def test_two_devices_tapping_at_once_resolve_once(env):
+    _, phone = await env.device("Pixel 8", one_tap=True)
+    _, laptop = await env.device("Laptop")
+    task = _ask(env, _req())
+    on_phone, on_laptop = await env.pushed(phone), await env.pushed(laptop)
+    responses = await asyncio.gather(
+        env.action("P1", "approve", on_phone["token"]),
+        env.action("P1", "deny", on_laptop["token"]),
+    )
+    statuses = [r.status for r in responses]
+    assert sorted(statuses)[0] == 200 and sorted(statuses)[1] in (409, 410), statuses
+    outcome = await task
+    winner = responses[statuses.index(200)]
+    assert outcome.approved is (await winner.json())["approved"]
+    await until(lambda: env.telegram.finalized)
+    await asyncio.sleep(0.05)
+    assert [h.ref for h, _ in env.telegram.finalized] == [{"message_id": 1}]  # resolved once
+
+
 async def test_finalize_pushes_resolved_and_action_after_is_410(env):
     _, sub = await env.device(one_tap=True)
     task = _ask(env, _req())
