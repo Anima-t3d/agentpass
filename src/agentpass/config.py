@@ -620,6 +620,8 @@ def _telegram_settings(tg_raw: Any, where: str) -> TelegramConfig:
 CHANNEL_TRUST = ("trusted", "notify")
 CHANNEL_TYPES = ("telegram", "passkey", "webhook", "command")
 NOTIFY_TYPES = ("webhook", "command")
+# Names the gateway gives its own channels; an entry of another type must not take them.
+RESERVED_CHANNEL_NAMES = ("passkey", "push")
 _NOTIFY_KEYS = {
     "webhook": {"name", "type", "trust", "url", "timeout"},
     "command": {"name", "type", "trust", "command", "timeout"},
@@ -690,6 +692,11 @@ def _load_channels(raw: dict[str, Any]) -> list[ChannelConfig]:
         trust = entry.get("trust", "notify" if ctype in NOTIFY_TYPES else "trusted")
         if trust not in CHANNEL_TRUST:
             raise ConfigError(f"{where}.trust must be one of {CHANNEL_TRUST}")
+        if name in RESERVED_CHANNEL_NAMES and ctype != name:
+            raise ConfigError(
+                f"{where}: the name {name!r} is reserved for the {name} channel "
+                f"(type {ctype!r} given)"
+            )
         if any(c.name == name for c in channels):
             raise ConfigError(f"Duplicate channel name: {name}")
         if ctype in NOTIFY_TYPES:
