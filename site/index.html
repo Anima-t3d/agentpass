@@ -56,7 +56,7 @@
                 <p>Thanks for the report. I reproduced it on <code>main</code>: the retry loop exits on the first 5xx. A fix is in #43.</p>
               </div>
             </div>
-            <p class="agent-note">Agent note (written by the agent): “Replying to the reporter.”</p>
+            <p class="agent-note">Unverified text from the agent: “Replying to the reporter.”</p>
             <div class="approval-buttons" aria-hidden="true">
               <div class="fake-btn">Deny</div>
               <div class="fake-btn fake-approve">Approve</div>
@@ -90,6 +90,146 @@
             <span>Nothing left to leak</span>
           </a>
         </div>
+      </div>
+    </section>
+    <section class="section pain" id="pain-blocked" aria-labelledby="pain-blocked-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-blocked-title">Approve from wherever you are</h2>
+          <p class="pain-quote">“I want my agent to keep working when I step away, but it stalls on the first approval prompt.”</p>
+          <p class="muted">Most of what an agent does is safe. The trouble is the few calls that aren't, and a prompt on a laptop you just walked away from.</p>
+        </div>
+        <ul class="answer">
+          <li><strong>The request comes to your phone.</strong> Approve or deny with a tap in Telegram, or open the approval page and confirm with your passkey.</li>
+          <li><strong>Safe calls never wait.</strong> Rules per tool and per argument decide what's allowed, what asks you and what's denied. Reading an issue goes through; posting a comment asks.</li>
+          <li><strong>Answer once, not every time.</strong> “Allow always” and “Deny always” remember a decision for the exact call or the tool, within limits the gateway checks.</li>
+          <li class="soon"><span class="soon-badge">Coming soon</span><br><strong>An installable approval app with push notifications.</strong> The notification says what's being asked, with Approve and Deny right on it, and the app keeps your approval history.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section pain" id="pain-blind" aria-labelledby="pain-blind-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-blind-title">See what you're approving</h2>
+          <p class="pain-quote">“Honestly, I click yes without really reading what it's asking.”</p>
+          <p class="muted">A tool name and a blob of JSON don't tell you much. So people stop reading, and an approval prompt turns into a habit.</p>
+        </div>
+        <ul class="answer">
+          <li><strong>Previews of the real thing.</strong> The file change as a diff, the email as it will be sent, the full text of a comment and the issue it goes on.</li>
+          <li><strong>Built by the gateway, not the agent.</strong> Previews come from the checked arguments and read-only lookups the gateway makes itself, so the agent can't dress up what you see.</li>
+          <li><strong>The agent's own words are fenced off.</strong> An agent can explain why it wants something. That text is shown separately and labelled as written by the agent.</li>
+          <li><strong>No preview, no pretending.</strong> If a preview can't be built, the page says so and shows the raw arguments. It never approves on its own.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section pain" id="pain-bitten" aria-labelledby="pain-bitten-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-bitten-title">Rules the agent can't get around</h2>
+          <p class="pain-quote">“I set up careful auto-approve rules. The agent still found a way around them.”</p>
+          <p class="muted">Rules inside the agent are suggestions to a program that can rewrite its own setup, call a different tool or simply log itself in somewhere else.</p>
+        </div>
+        <div>
+          <ul class="answer">
+            <li><strong>The agent never holds the credential.</strong> Tokens for GitHub, Google and Home Assistant stay with the gateway, under a different user. The agent only gets a gateway token.</li>
+            <li><strong>A floor no agent can lower.</strong> Deny and ask rules in the policy floor beat every agent file, shared rule set and remembered “Allow always”.</li>
+            <li><strong>It can't hand itself more access.</strong> Adding collaborators, creating deploy keys, setting Actions secrets and changing branch protection are denied in the shipped GitHub rules.</li>
+          </ul>
+          <p class="story">One agent, blocked on GitHub, tried to log itself in to GitHub with full repo access. Behind AgentPass there's no token on the agent's side to find, and the things that would give it lasting access are denied by default.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section pain" id="pain-burned" aria-labelledby="pain-burned-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-burned-title">Nothing on the agent's side to leak</h2>
+          <p class="pain-quote">“My agent did something serious I never meant it to, and a secret got out.”</p>
+          <p class="muted">When the agent holds the keys, one bad instruction or prompt injection can use them in ways you never intended.</p>
+        </div>
+        <ul class="answer">
+          <li><strong>No secrets to exfiltrate.</strong> The agent can read everything it has and still not find a service token.</li>
+          <li><strong>Risky actions need a person.</strong> Sending mail or changing a file asks you first, the most sensitive calls can require your passkey, and deleting a repository is denied outright.</li>
+          <li><strong>Every call is on the record.</strong> The audit log keeps who asked, what was called, what was decided and by whom, and the agent can't edit it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" id="github" aria-labelledby="github-title">
+      <div class="container">
+        <h2 id="github-title">Example: GitHub with you in the loop</h2>
+        <p class="lede">Your agent triages issues and drafts replies. Nothing reaches GitHub until you've seen it.</p>
+        <ol class="steps">
+          <li class="reveal"><p>The agent drafts a reply to an issue and asks AgentPass to post it.</p></li>
+          <li class="reveal"><p>Your phone shows the full comment and the issue it goes on, in the right repo.</p></li>
+          <li class="reveal"><p>You read it, then approve or deny.</p></li>
+          <li class="reveal"><p>The gateway posts it with its own token. The call is in the audit log.</p></li>
+        </ol>
+        <div class="soon steps-soon">
+          <span class="soon-badge">Coming soon</span>
+          <h3>Secure clone of a private repo</h3>
+          <p>Approve an update for one exact commit, shown before you approve. The gateway fetches it into a read-only mirror the agent can pull from, with no token on the agent.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="how" aria-labelledby="how-title">
+      <div class="container">
+        <h2 id="how-title">How it works</h2>
+        <p class="lede">AgentPass sits between your agent and the services it uses. The agent asks; the gateway decides, asks you when needed, and makes the call.</p>
+        <div class="diagram">
+          <svg class="diagram-h" role="img" aria-label="Diagram: the agent sends a request to AgentPass. AgentPass checks policy, holds the credentials and builds a preview, asks you on your phone or desktop when needed, then calls the service, such as GitHub, Gmail, Google Calendar or Home Assistant." viewBox="0 0 960 200">
+            <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor"/></marker></defs>
+            <g style="color: var(--muted)">
+              <rect class="box" x="10" y="60" width="170" height="80" rx="12"/>
+              <text class="t" x="95" y="96" text-anchor="middle">Your agent</text>
+              <text class="s" x="95" y="118" text-anchor="middle">holds a gateway token</text>
+              <path class="arrow" d="M184 100H262" stroke-width="2" marker-end="url(#ah)"/>
+              <rect class="box box-gate" x="266" y="30" width="260" height="140" rx="14"/>
+              <text class="t" x="396" y="66" text-anchor="middle">AgentPass</text>
+              <text class="s" x="396" y="94" text-anchor="middle">policy: allow, ask, deny</text>
+              <text class="s" x="396" y="116" text-anchor="middle">credentials stay here</text>
+              <text class="s" x="396" y="138" text-anchor="middle">trusted preview, audit log</text>
+              <path class="arrow" d="M396 174V186H690" stroke-width="2" stroke-dasharray="5 5" marker-start="url(#ah)" marker-end="url(#ah)"/>
+              <rect class="box" x="600" y="150" width="180" height="46" rx="10"/>
+              <text class="t" x="690" y="179" text-anchor="middle">You</text>
+              <path class="arrow" d="M530 80H762" stroke-width="2" marker-end="url(#ah)"/>
+              <rect class="box" x="766" y="40" width="184" height="90" rx="12"/>
+              <text class="t" x="858" y="72" text-anchor="middle">The service</text>
+              <text class="s" x="858" y="94" text-anchor="middle">GitHub, Gmail, Calendar,</text>
+              <text class="s" x="858" y="112" text-anchor="middle">Home Assistant</text>
+            </g>
+          </svg>
+          <svg class="diagram-v" role="img" aria-label="Diagram: the agent sends a request to AgentPass, which asks you when needed and then calls the service." viewBox="0 0 300 470">
+            <defs><marker id="av" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor"/></marker></defs>
+            <g style="color: var(--muted)">
+              <rect class="box" x="40" y="5" width="220" height="64" rx="12"/>
+              <text class="t" x="150" y="33" text-anchor="middle">Your agent</text>
+              <text class="s" x="150" y="54" text-anchor="middle">holds a gateway token</text>
+              <path class="arrow" d="M150 72V112" stroke-width="2" marker-end="url(#av)"/>
+              <rect class="box box-gate" x="20" y="116" width="260" height="120" rx="14"/>
+              <text class="t" x="150" y="148" text-anchor="middle">AgentPass</text>
+              <text class="s" x="150" y="174" text-anchor="middle">policy: allow, ask, deny</text>
+              <text class="s" x="150" y="196" text-anchor="middle">credentials stay here</text>
+              <text class="s" x="150" y="218" text-anchor="middle">trusted preview, audit log</text>
+              <path class="arrow" d="M150 240V280" stroke-width="2" stroke-dasharray="5 5" marker-start="url(#av)" marker-end="url(#av)"/>
+              <rect class="box" x="60" y="284" width="180" height="46" rx="10"/>
+              <text class="t" x="150" y="313" text-anchor="middle">You approve</text>
+              <path class="arrow" d="M150 334V374" stroke-width="2" marker-end="url(#av)"/>
+              <rect class="box" x="30" y="378" width="240" height="84" rx="12"/>
+              <text class="t" x="150" y="408" text-anchor="middle">The service</text>
+              <text class="s" x="150" y="430" text-anchor="middle">GitHub, Gmail, Calendar,</text>
+              <text class="s" x="150" y="448" text-anchor="middle">Home Assistant</text>
+            </g>
+          </svg>
+        </div>
+        <ul class="hops">
+          <li><strong>The agent connects</strong> over a local Unix socket, a WebSocket, or MCP, with its own token. Each agent gets its own rules and its own audit trail.</li>
+          <li><strong>The gateway decides.</strong> Deny beats allow, allow beats ask. When a call needs you, it builds the preview and sends the request to every approval channel you've set up.</li>
+          <li><strong>The first valid answer wins.</strong> Then the gateway makes the call with its own credentials and returns only the result to the agent.</li>
+        </ul>
       </div>
     </section>
   </main>

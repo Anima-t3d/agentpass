@@ -353,3 +353,28 @@ def test_hero_copy():
     links = {(e.text, e.attrs.get("href")) for e in page.elements if e.tag == "a"}
     assert ("Get started", "#quickstart") in links
     assert ("View on GitHub", REPO_URL) in links
+
+
+CLAIM_SECTIONS = ["pain-blocked", "pain-blind", "pain-bitten", "pain-burned", "github", "how"]
+
+
+def claims_rows() -> list[tuple[str, str, str]]:
+    rows = []
+    for line in (SITE / "CLAIMS.md").read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 3 and line.lstrip().startswith("|") and not set(cells[0]) <= set("-: "):
+            rows.append((cells[0], cells[1].strip("`"), cells[2]))
+    return rows[1:]  # drop the header row
+
+
+def test_claims_file_covers_sections():
+    rows = claims_rows()
+    covered = {section for _, section, _ in rows}
+    for section in CLAIM_SECTIONS:
+        assert section in covered, f"no claim row for #{section}"
+    ids = set(parse().ids())
+    for claim, section, backing in rows:
+        assert section in ids, f"claim {claim!r}: section #{section} not on the page"
+        for path in re.findall(r"`([^`]+)`", backing):
+            assert (ROOT / path).exists(), f"claim {claim!r}: {path} does not exist"
+        assert re.search(r"`[^`]+`", backing), f"claim {claim!r} has no backing path"
