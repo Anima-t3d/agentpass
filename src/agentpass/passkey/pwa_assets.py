@@ -8,6 +8,8 @@ in ``pwa_icons`` (embedded PNG bytes; there is no build step).
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 THEME = "#0b1017"
 
@@ -33,57 +35,27 @@ MANIFEST = {
 }
 MANIFEST_JSON = json.dumps(MANIFEST, indent=2)
 
-# `__VERSION__` is replaced with a hash of the shell assets, so a new build changes the worker
-# bytes, which installs a new worker and a fresh cache. Push handling is added in a later task.
-SW_JS = r"""'use strict';
-const CACHE = 'agentpass-shell-__VERSION__';
-const SHELL = [
-  '/', '/static/app.js', '/static/app.css', '/manifest.webmanifest',
-  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png',
-];
-const isApi = (url) => url.pathname.startsWith('/api/');
-const isNavigation = (req, url) =>
-  req.mode === 'navigate' || url.pathname === '/' || url.pathname.startsWith('/a/');
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL))
-    .then(() => self.skipWaiting()));
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys()
-    .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-    .then(() => self.clients.claim()));
-});
-
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
-  if (isApi(url)) {  // network only: API responses are never cached
-    event.respondWith(fetch(req));
-    return;
-  }
-  if (isNavigation(req, url)) {  // the shell is one document for / and /a/<id>
-    event.respondWith(fetch(req).then((res) => {
-      if (res.ok) {
-        const copy = res.clone();
-        caches.open(CACHE).then((cache) => cache.put('/', copy));
-      }
-      return res;
-    }).catch(() => caches.open(CACHE).then((cache) => cache.match('/'))
-      .then((hit) => hit || Response.error())));
-    return;
-  }
-  event.respondWith(caches.open(CACHE).then((cache) => cache.match(req).then((hit) => {
-    if (hit) return hit;
-    return fetch(req).then((res) => {
-      if (res.ok && SHELL.includes(url.pathname)) cache.put(req, res.clone());
-      return res;
-    });
-  })));
+# The worker's logic lives in static/sw-logic.mjs, which node:test loads directly. Here it is read
+# once, its `export` keywords are dropped (a classic worker has no modules) and the glue that
+# hands it the real worker globals is appended. `__VERSION__` in it is replaced with a hash of
+# the shell assets, so a new build changes the worker bytes: a new worker and a fresh cache.
+SW_LOGIC_PATH = Path(__file__).parent / "static" / "sw-logic.mjs"
+_SW_GLUE = """
+setup(self, {
+  caches,
+  fetch: (...args) => fetch(...args),
+  store: idbStore(indexedDB),
+  now: () => Date.now(),
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 });
 """
+
+
+def build_sw(source: str) -> str:
+    return "'use strict';\n" + re.sub(r"^export ", "", source, flags=re.MULTILINE) + _SW_GLUE
+
+
+SW_JS = build_sw(SW_LOGIC_PATH.read_text(encoding="utf-8"))
 
 SHELL_CSS = r"""
 /* PWA shell: offline notice, tabs, panels */
@@ -124,6 +96,7 @@ function switchTab(name, focus) {
     panel.hidden = !on;
     if (on && focus) tab.focus();
   }
+  onTabShown(name);
 }
 function wireTabs() {
   const bar = document.querySelector('[role="tablist"]');
@@ -142,16 +115,24 @@ function wireTabs() {
 }
 
 /* A failed fetch (no HTTP response at all) means the device is off the tailnet. */
+let netDown = false;
+const TAILSCALE_INTENT = 'intent://#Intent;package=com.tailscale.ipn;end';
 function offline(on) {
   const box = document.getElementById('offline');
   if (!box) return;
+  const changed = netDown !== on;
+  netDown = on;  // Approve and Deny stay disabled until the gateway answers again
+  if (changed) for (const s of cards.values()) syncButtons(s);
   if (!on) { box.hidden = true; box.replaceChildren(); return; }
   if (!box.hidden) return;
   const retry = h('button', {cls: 'btn btn-quiet', type: 'button'}, h('span', {text: 'Retry now'}));
   retry.addEventListener('click', load);
   box.replaceChildren(icon('alert'), h('div', null,
     h('span', {cls: 'panel-title', text: 'Not connected to Tailscale'}),
-    h('span', {text: 'Showing the last known state. Retrying every few seconds.'})), retry);
+    h('span', {text: 'Showing the last known state. Retrying every few seconds.'}),
+    /Android/i.test(navigator.userAgent)
+      ? h('a', {cls: 'panel-title', href: TAILSCALE_INTENT, text: 'Open Tailscale'})
+      : h('span', {text: 'Connect Tailscale on this device to reach the gateway.'})), retry);
   box.hidden = false;
 }
 

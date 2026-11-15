@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
+import shutil
+import subprocess
+import tomllib
+from pathlib import Path
+
+import pytest
 
 from agentpass.passkey import assets, pwa_assets
 from agentpass.passkey.page import CSP
@@ -51,13 +58,74 @@ async def test_sw_served_with_js_type_and_no_cache(env):  # noqa: F811
     assert r.headers["Content-Security-Policy"] == EXPECTED_CSP
 
 
-def test_sw_never_caches_api_responses():
+# The worker's behaviour (never caching /api/*, push, actions, the offline queue) is tested
+# in tests/js/sw-logic.test.mjs with stubbed globals; here: that the shipped worker is that file.
+SW_LOGIC = Path(pwa_assets.__file__).parent / "static" / "sw-logic.mjs"
+
+
+def test_sw_is_built_from_the_tested_logic_file():
+    source = SW_LOGIC.read_text(encoding="utf-8")
+    assert "export function setup" in source
     sw = pwa_assets.SW_JS
-    assert "/api/" in sw  # explicit network-only branch
-    assert "cache.put" not in sw or "isApi" in sw
-    # the API branch returns before any cache write
-    api = sw.index("isApi(")
-    assert sw.index("cache.put") > api
+    assert "export " not in sw  # a classic worker has no modules
+    assert sw.startswith("'use strict';")
+    assert "function setup(self, env)" in sw
+    assert re.search(r"^setup\(self, \{", sw, re.MULTILINE)
+    assert "idbStore(indexedDB)" in sw
+    # every function the node tests pin is in the shipped worker
+    for name in ("notificationFor", "decideClick", "queueDecision", "resolvedText"):
+        assert f"function {name}(" in sw
+    assert "must stay static" in source  # the cached shell holds no per-user content
+
+
+def test_sw_logic_file_ships_in_the_package():
+    root = Path(__file__).parent.parent
+    cfg = tomllib.loads((root / "pyproject.toml").read_text())
+    patterns = cfg["tool"]["setuptools"]["package-data"]["agentpass"]
+    rel = SW_LOGIC.relative_to(root / "src" / "agentpass").as_posix()
+    assert any(fnmatch.fnmatch(rel, pat) for pat in patterns), (rel, patterns)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_service_worker_logic_node_tests_pass():
+    root = Path(__file__).parent.parent
+    run = subprocess.run(
+        ["node", "--test", *sorted(str(p) for p in (root / "tests" / "js").glob("*.test.mjs"))],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-2000:]
+
+
+async def test_served_worker_has_a_version_and_the_queue_tag(env):  # noqa: F811
+    body = await (await env.get("/sw.js")).text()
+    assert "__VERSION__" not in body
+    assert re.search(r"agentpass-shell-[0-9a-f]{12}", body)
+    assert "agentpass-actions" in body and "/api/push/action" in body
+
+
+def test_app_script_has_history_and_devices_views():
+    js = assets.APP_JS
+    for needle in (
+        "/api/history",
+        "One-tap enable refused",
+        "Enable notifications on this device",
+        "Notification.requestPermission()",
+        "pushManager.subscribe({userVisibleOnly: true, applicationServerKey",
+        "/api/push/subscribe",
+        "/one-tap/options",
+        "assertWith(await api(base + '/one-tap/options'",
+        "Approve from the notification without a fingerprint, for requests that don't "
+        "require a passkey.",
+        "intent://#Intent;package=com.tailscale.ipn;end",
+        "/Android/i.test(navigator.userAgent)",
+        "retry-actions",
+        "' (notification)'",
+        "'Resolved by'",
+    ):
+        assert needle in js, needle
+    assert "innerHTML" not in js and "outerHTML" not in js and "insertAdjacentHTML" not in js
 
 
 async def test_deep_link_serves_shell_for_any_id_without_leaking_data(env):  # noqa: F811

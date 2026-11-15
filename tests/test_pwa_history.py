@@ -44,6 +44,7 @@ async def test_history_returns_dashboard_shape_newest_first(env):  # noqa: F811
     assert set(data) == {"entries", "total", "page", "per_page", "pages"}
     assert data["total"] == 4 and data["per_page"] == 50 and data["pages"] == 1
     assert [e["request_id"] for e in data["entries"]] == ["one-tap:dev1", "r3", "r2", "r1"]
+    assert isinstance(data["entries"][0]["timestamp"], (int, float))  # epoch seconds; the UI scales
     assert {"timestamp", "tool_name", "signature", "decision", "resolved_by", "agent_id"} <= set(
         data["entries"][0]
     )

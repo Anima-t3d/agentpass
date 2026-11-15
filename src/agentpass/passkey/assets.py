@@ -6,7 +6,7 @@ agent or a device wrote can become markup. The CSP forbids inline styles, so sty
 by class only.
 """
 
-from agentpass.passkey import pwa_assets
+from agentpass.passkey import pwa_assets, pwa_views
 
 _HEAD = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -335,6 +335,7 @@ details.raw>.args{margin:0 var(--s3) var(--s3)}
 }
 """
     + pwa_assets.SHELL_CSS
+    + pwa_views.VIEWS_CSS
 )
 
 APP_JS = (
@@ -619,8 +620,8 @@ function buildCard(p) {
 }
 
 function syncButtons(s) {
-  s.ok.disabled = s.busy || !s.confirmed || s.expired === true;
-  s.no.disabled = s.busy || s.expired === true;
+  s.ok.disabled = s.busy || netDown || !s.confirmed || s.expired === true;
+  s.no.disabled = s.busy || netDown || s.expired === true;
 }
 
 function say(s, panel) {
@@ -789,6 +790,7 @@ async function load() {
   signInPanel(false);
   banner(false);
   offline(false);
+  viewsSignedIn();
   enrolled = data.enrolled > 0;
   loaded = true;
   const list = document.getElementById('list');
@@ -879,4 +881,5 @@ session().then(() => {
 });
 """
     + pwa_assets.SHELL_JS
+    + pwa_views.VIEWS_JS
 )
