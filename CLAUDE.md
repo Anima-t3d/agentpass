@@ -144,3 +144,4 @@ The agent API listens on a Unix socket by default (0660, group agentpass-clients
 - Mock external services: WebSocket, Telegram Bot API, HTTP APIs
 - Unit tests per module, integration test for full flow
 - Run `pytest` for the current suite; test_request_path.py covers the full request path
+- Service worker logic: `node --test "tests/js/*.test.mjs"` (Node 24)

@@ -200,6 +200,11 @@ class ApprovalChannel(ABC):
 1. Telegram (refactor of the existing adapter: stateless callbacks, no persistence file).
 2. Passkey approval page.
 3. `notify`-only adapters: webhook and command (display plus link, for chat bridges and notification tools). Whether a plugin ever relays assertions is deferred.
+4. Push channel (Web Push to the approval app, optional).
+
+### 4.5 Push channel
+
+The push channel (`name = "push"`, enabled by `passkey.push.enabled`) sends an encrypted Web Push (RFC 8291/8292) to every device subscribed in the approval app, and a "resolved" push when the request ends. Its trust is `trusted` and its `proof_kinds` is `{"push_action"}`; it never contains `webauthn` or `telegram_callback`. Because `satisfies()` only counts an approval from a channel whose `proof_kinds` matches the rule, a push answer satisfies `any_trusted` and never `require: passkey` or `require: telegram`; a trusted deny always counts. The channel itself answers an Approve from a notification only when the device's server-side one-tap setting is on and the request is `any_trusted`; otherwise the tap opens the page for a normal passkey approval. Action tokens are single use, bound to an approval and a device, and held in memory. A rule that lists `approval.channels` includes the push channel only if it names `push`. See [PWA.md](PWA.md).
 
 ## 5. Configuration and rule format
 
