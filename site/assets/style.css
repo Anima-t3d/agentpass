@@ -178,6 +178,10 @@ ul {
   color: var(--muted);
 }
 
+.after {
+  margin-top: 1.75rem;
+}
+
 /* header */
 
 .site-header {

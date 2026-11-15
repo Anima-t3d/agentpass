@@ -25,3 +25,23 @@ Not published (the Pages workflow removes this file). Keep it in step with `inde
 | Deny beats allow, allow beats ask | `how` | `src/agentpass/engine.py`, `README.md` |
 | Request goes to every approval channel; first valid answer wins | `how` | `src/agentpass/approval/coordinator.py` |
 | Each agent has its own rules and audit trail | `how` | `src/agentpass/agents.py`, `docs/DESIGN.md` |
+| Policy patterns on the call signature, e.g. `gh_put_contents(*, main)` | `features` | `src/agentpass/engine.py`, `policy/github.yaml` |
+| Policy floor no agent file can relax | `features` | `policy/_floor.example.yaml` |
+| Telegram buttons and passkey page; a rule can require a passkey | `features` | `src/agentpass/approval/telegram_channel.py`, `src/agentpass/passkey/channel.py`, `README.md` |
+| WebAuthn passkeys; only public keys stored | `features` | `src/agentpass/passkey/store.py`, `README.md` |
+| Previews: diffs, email, comment text, device state, what a delete removes | `features` | `src/agentpass/preview/renderers.py`, `tools/github.yaml`, `tools/homeassistant.yaml` |
+| Remembered decisions per exact call or tool, with limits | `features` | `docs/REMEMBERED-DECISIONS.md` |
+| Audit log and admin-only dashboard | `features` | `src/agentpass/dashboard/routes.py`, `README.md` |
+| Unix socket, WebSocket, MCP, CLI, Python SDK; token and rules per agent | `features` | `src/agentpass/listen.py`, `src/agentpass/mcp.py`, `src/agentpass/cli.py`, `src/agentpass/client.py`, `src/agentpass/agents.py` |
+| Tools declared in YAML; GitHub, Gmail, Calendar, Drive, Home Assistant ship | `features` | `tools/github.yaml`, `tools/gmail.yaml`, `tools/calendar.yaml`, `tools/drive.yaml`, `tools/homeassistant.yaml` |
+| `agentpass check-config` offline check | `features` | `src/agentpass/check.py` |
+| Threat model: protects against token reads, self-approval, own-permission changes, audit tampering; not root, operator phone/passkey, malicious service | `security` | `docs/DESIGN.md` |
+| Previews come from the gateway, so the approval shows what will run | `security` | `docs/APPROVAL-PREVIEWS.md` |
+| Install by clone + `pip install .`; client via pip from git | `quickstart` | `pyproject.toml` |
+| Minimal config: socket listener, agent token, Telegram, GitHub service, SQLite | `quickstart` | `config.example.yaml`, `README.md` |
+| `check-config`, `serve --config --permissions`, `tools --socket --token` | `quickstart` | `src/agentpass/__main__.py`, `src/agentpass/cli.py` |
+| `docker compose up -d` with config, permissions and .env | `quickstart` | `docker-compose.yml` |
+| CLI, Python SDK, MCP endpoint, OpenClaw skill | `faq` | `src/agentpass/cli.py`, `src/agentpass/client.py`, `src/agentpass/mcp.py`, `skills/openclaw/SKILL.md` |
+| Unanswered request times out (15 min default) and isn't run | `faq` | `src/agentpass/approval/coordinator.py`, `src/agentpass/pipeline.py`, `config.example.yaml` |
+| Python plugin services for non-HTTP APIs | `faq` | `README.md` |
+| Created by Torben Wetter, MIT | `faq` | `LICENSE`, `pyproject.toml` |

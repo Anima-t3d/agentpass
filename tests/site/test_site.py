@@ -86,10 +86,11 @@ def norm(text: str) -> str:
 
 
 class Element:
-    def __init__(self, tag: str, attrs: dict[str, str], in_soon: bool) -> None:
+    def __init__(self, tag: str, attrs: dict[str, str], in_soon: bool, within: set[str]) -> None:
         self.tag = tag
         self.attrs = attrs
         self.in_soon = in_soon
+        self.within = within  # ids of the element itself and its ancestors
         self.parts: list[str] = []
 
     @property
@@ -115,7 +116,10 @@ class Page(HTMLParser):
         in_soon = (
             any("soon" in e.classes for e in self.stack) or "soon" in a.get("class", "").split()
         )
-        el = Element(tag, a, in_soon)
+        within = {e.attrs["id"] for e in self.stack if "id" in e.attrs}
+        if "id" in a:
+            within.add(a["id"])
+        el = Element(tag, a, in_soon, within)
         self.elements.append(el)
         return el
 
@@ -142,6 +146,13 @@ class Page(HTMLParser):
 
     def by_id(self, ident: str) -> Element | None:
         return next((e for e in self.elements if e.attrs.get("id") == ident), None)
+
+    def links_in(self, ident: str) -> list[tuple[str, str]]:
+        return [
+            (e.text, e.attrs.get("href", ""))
+            for e in self.elements
+            if e.tag == "a" and ident in e.within
+        ]
 
     def ids(self) -> list[str]:
         return [e.attrs["id"] for e in self.elements if "id" in e.attrs]
@@ -207,7 +218,7 @@ def is_relative(url: str) -> bool:
 
 def test_sections_present_in_order():
     ids = [i for i in parse().ids() if i in SECTION_IDS]
-    assert ids == [i for i in SECTION_IDS if i in ids]
+    assert ids == SECTION_IDS
 
 
 def test_no_third_party_resources():
@@ -239,8 +250,7 @@ def test_internal_anchors_resolve():
     for el in page.elements:
         href = el.attrs.get("href", "")
         if href.startswith("#") and href != "#":
-            # Until every section exists (Task 3), a link may point at a planned section id.
-            assert href[1:] in ids or href[1:] in SECTION_IDS, href
+            assert href[1:] in ids, href
 
 
 def test_repo_links_use_one_base():
@@ -355,7 +365,18 @@ def test_hero_copy():
     assert ("View on GitHub", REPO_URL) in links
 
 
-CLAIM_SECTIONS = ["pain-blocked", "pain-blind", "pain-bitten", "pain-burned", "github", "how"]
+CLAIM_SECTIONS = [
+    "pain-blocked",
+    "pain-blind",
+    "pain-bitten",
+    "pain-burned",
+    "github",
+    "how",
+    "features",
+    "security",
+    "quickstart",
+    "faq",
+]
 
 
 def claims_rows() -> list[tuple[str, str, str]]:
@@ -378,3 +399,34 @@ def test_claims_file_covers_sections():
         for path in re.findall(r"`([^`]+)`", backing):
             assert (ROOT / path).exists(), f"claim {claim!r}: {path} does not exist"
         assert re.search(r"`[^`]+`", backing), f"claim {claim!r} has no backing path"
+
+
+def section_text(ident: str) -> str:
+    el = parse().by_id(ident)
+    assert el is not None, ident
+    return el.text
+
+
+def test_quickstart_commands():
+    text = section_text("quickstart")
+    assert 'pip install "git+https://github.com/Anima-t3d/agentpass"' in text
+    assert "docker compose up" in text
+    assert not re.search(r"pip install agentpass(\s|$)", text)
+
+
+def test_hosted_interest_link():
+    page = parse()
+    discussions = REPO_URL + "/discussions"
+    hrefs = [h for _, h in page.links_in("open-source")]
+    assert any(h == discussions or h.startswith(discussions + "/") for h in hrefs), hrefs
+    assert not any(e.tag in ("form", "input") for e in page.elements)
+
+
+def test_footer_credit():
+    page = parse()
+    footer = page.by_id("footer")
+    assert footer is not None and footer.tag == "footer"
+    links = page.links_in("footer")
+    assert any(href == UPSTREAM_URL for _, href in links)
+    assert ("Get started", "#quickstart") in links
+    assert "MIT" in footer.text

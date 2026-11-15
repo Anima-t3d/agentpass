@@ -232,6 +232,214 @@
         </ul>
       </div>
     </section>
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="container">
+        <h2 id="features-title">What's in the box</h2>
+        <div class="features">
+          <div class="feature"><h3>Policy per tool and per argument</h3><p>Allow, ask or deny by pattern on the call itself, such as <code>gh_put_contents(*, main)</code>.</p></div>
+          <div class="feature"><h3>A policy floor</h3><p>Deny and ask rules no agent file, shared rule set or remembered decision can relax.</p></div>
+          <div class="feature"><h3>Approval channels</h3><p>Telegram buttons and a passkey approval page. A rule can require a passkey for the calls that matter most.</p></div>
+          <div class="feature"><h3>Passkeys</h3><p>WebAuthn on your phone or laptop. Only public keys are stored on the gateway.</p></div>
+          <div class="feature"><h3>Trusted previews</h3><p>Diffs, rendered email, comment text, device state and what a delete removes, built by the gateway.</p></div>
+          <div class="feature"><h3>Remembered decisions</h3><p>“Allow always” and “Deny always”, per exact call or per tool, with limits on what can be remembered.</p></div>
+          <div class="feature"><h3>Audit log and dashboard</h3><p>Every call, decision and resolver, browsable on an admin-only dashboard.</p></div>
+          <div class="feature"><h3>Agents connect their way</h3><p>Unix socket, WebSocket or MCP, a CLI and a Python SDK. One token and one rule set per agent.</p></div>
+          <div class="feature"><h3>Any HTTP API in YAML</h3><p>Tools are declared in YAML: arguments, validation, request and preview. GitHub, Gmail, Calendar, Drive and Home Assistant ship ready to use.</p></div>
+          <div class="feature"><h3>Offline config check</h3><p><code>agentpass check-config</code> catches broken rules, missing previews and unsafe settings before you start.</p></div>
+          <div class="feature soon"><span class="soon-badge">Coming soon</span><h3>Approval app with push notifications</h3><p>An installable PWA: Approve and Deny on the notification, history in your pocket.</p></div>
+          <div class="feature soon"><span class="soon-badge">Coming soon</span><h3>Git mirror</h3><p>Pull private repos into a read-only mirror, one approved commit at a time, with no token on the agent.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="security" aria-labelledby="security-title">
+      <div class="container">
+        <h2 id="security-title">The security model, plainly</h2>
+        <p class="lede">AgentPass assumes your agent can run any command as its own user, including a prompt-injected one. It assumes the agent can't become root or read another user's private files.</p>
+        <div class="columns">
+          <div class="column">
+            <h3><span class="mark mark-yes" aria-hidden="true">✓</span>What it protects against</h3>
+            <ul>
+              <li>The agent reading service tokens, OAuth tokens or the bot token.</li>
+              <li>The agent approving its own request, through any channel it can reach.</li>
+              <li>The agent changing its own permissions or another agent's.</li>
+              <li>The approval showing something other than what will run: previews come from the gateway.</li>
+              <li>Silent actions and a tampered audit log.</li>
+            </ul>
+          </div>
+          <div class="column">
+            <h3><span class="mark mark-no" aria-hidden="true">✕</span>What it doesn't</h3>
+            <ul>
+              <li>Someone with root on the gateway machine.</li>
+              <li>A compromised phone or passkey of the person approving.</li>
+              <li>A service that is itself malicious or compromised.</li>
+              <li>You approving something harmful after reading it.</li>
+              <li>Misuse that stays inside a rule you set to allow.</li>
+            </ul>
+          </div>
+        </div>
+        <p class="muted after">The full threat model is in <a href="https://github.com/Anima-t3d/agentpass/blob/main/docs/DESIGN.md">docs/DESIGN.md</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" id="quickstart" aria-labelledby="quickstart-title">
+      <div class="container">
+        <h2 id="quickstart-title">Get started</h2>
+        <p class="lede">Run the gateway on a machine you trust, such as a home server, a NAS or a VPS. Your agent can run on the same machine as another user, or elsewhere.</p>
+        <ol class="qs">
+          <li>
+            <h3>Install</h3>
+            <p>The tool and policy files live in the repository, so clone it on the gateway:</p>
+            <pre><code>git clone https://github.com/Anima-t3d/agentpass
+cd agentpass
+pip install .</code></pre>
+            <p>On the agent's side you only need the client:</p>
+            <pre><code>pip install "git+https://github.com/Anima-t3d/agentpass"</code></pre>
+          </li>
+          <li>
+            <h3>Configure</h3>
+            <p>Put <code>AGENT_TOKEN</code>, <code>GUARDIAN_BOT_TOKEN</code> and <code>GITHUB_TOKEN</code> in <code>.env</code>, then write <code>config.yaml</code>:</p>
+            <pre><code>listen:
+  socket: /run/agentpass/agent.sock
+  group: agentpass-clients
+
+agent:
+  token: "${AGENT_TOKEN}"
+
+messenger:
+  type: telegram
+  telegram:
+    token: "${GUARDIAN_BOT_TOKEN}"
+    chat_id: -100123456789     # your Telegram chat
+    allowed_users: [123456789] # who may approve
+
+services:
+  github:
+    url: "https://api.github.com"
+    auth: { type: bearer, token: "${GITHUB_TOKEN}" }
+    tools: "tools/github.yaml"
+
+storage:
+  type: sqlite
+  path: "./data/agentpass.db"</code></pre>
+            <p>And <code>permissions.yaml</code>: reads go through, everything else asks, deletes never happen.</p>
+            <pre><code>defaults:
+  - pattern: "gh_get_*"
+    action: allow
+  - pattern: "gh_list_*"
+    action: allow
+  - pattern: "*"
+    action: ask
+
+rules:
+  - pattern: "gh_delete_*"
+    action: deny</code></pre>
+          </li>
+          <li>
+            <h3>Check and start</h3>
+            <pre><code>agentpass check-config --config config.yaml
+agentpass serve --config config.yaml --permissions permissions.yaml</code></pre>
+            <p>Then, from the agent's user:</p>
+            <pre><code>agentpass tools --socket /run/agentpass/agent.sock --token "$AGENT_TOKEN"</code></pre>
+          </li>
+        </ol>
+        <p class="after">Prefer containers? The repository has a <code>docker-compose.yml</code>: add your <code>config.yaml</code>, <code>permissions.yaml</code> and <code>.env</code>, then run <code>docker compose up -d</code>.</p>
+        <p>Next: <a href="https://github.com/Anima-t3d/agentpass#readme">the README</a> covers passkeys, MCP, previews and Google accounts; <a href="https://github.com/Anima-t3d/agentpass/tree/main/docs">the docs</a> go deeper.</p>
+      </div>
+    </section>
+
+    <section class="section" id="fit" aria-labelledby="fit-title">
+      <div class="container">
+        <h2 id="fit-title">Is AgentPass for you?</h2>
+        <div class="columns">
+          <div class="column">
+            <h3><span class="mark mark-yes" aria-hidden="true">✓</span>A good fit if</h3>
+            <ul>
+              <li>Your agent uses real accounts: GitHub, email, calendar, the smart home.</li>
+              <li>You want it to work while you're away, and still decide on the risky calls.</li>
+              <li>You run a machine you trust: a home server, a NAS, a VPS.</li>
+              <li>You're comfortable editing YAML and running a small Python service.</li>
+            </ul>
+          </div>
+          <div class="column">
+            <h3><span class="mark mark-no" aria-hidden="true">✕</span>Probably not if</h3>
+            <ul>
+              <li>Your agent has no real credentials, so there's nothing to protect.</li>
+              <li>It runs in a throwaway sandbox you'd happily wipe.</li>
+              <li>You want zero approvals, ever. AgentPass can allow a lot, but its point is asking about the rest.</li>
+              <li>You have no machine you trust to hold the keys. A hosted option may come later, see below.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="open-source" aria-labelledby="open-source-title">
+      <div class="container oss">
+        <div>
+          <h2 id="open-source-title">Open source, always</h2>
+          <p>AgentPass is MIT licensed and self-hosted. Your credentials and your audit log stay on your machine. No account, no telemetry.</p>
+        </div>
+        <div class="hosted">
+          <h3>Don't run a server?</h3>
+          <p>A hosted version may come later, for people who'd rather not run their own. AgentPass itself stays open source either way.</p>
+          <a class="btn" href="https://github.com/Anima-t3d/agentpass/discussions">Tell us you're interested</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="faq" aria-labelledby="faq-title">
+      <div class="container">
+        <h2 id="faq-title">Questions</h2>
+        <div class="faq">
+          <details>
+            <summary>Does it work with my agent?</summary>
+            <div><p>If your agent can run a command, speak MCP, or open a WebSocket, yes. There's a CLI, a Python SDK, an MCP endpoint and a ready-made skill for OpenClaw.</p></div>
+          </details>
+          <details>
+            <summary>Where do my credentials live?</summary>
+            <div><p>On the gateway, readable only by the gateway's own user. The agent gets a gateway token that can ask for tool calls and nothing else.</p></div>
+          </details>
+          <details>
+            <summary>What happens when I'm away or don't answer?</summary>
+            <div><p>The request waits for an answer, 15 minutes by default. If nobody answers, the call isn't made and the agent is told it timed out. Calls your rules allow keep working, and remembered decisions answer repeat requests for you.</p></div>
+          </details>
+          <details>
+            <summary>Can the agent change its own rules?</summary>
+            <div><p>No. Rules live in files the agent can't write, and anything that would hand out access, like adding a collaborator or a deploy key, is denied by the shipped GitHub rules.</p></div>
+          </details>
+          <details>
+            <summary>Which services are supported?</summary>
+            <div><p>GitHub, Gmail, Google Calendar, Google Drive and Home Assistant ship as YAML tool files. Any other HTTP API can be added in YAML, and a Python plugin covers the rest.</p></div>
+          </details>
+          <details>
+            <summary>What does it cost?</summary>
+            <div><p>Nothing. It's MIT licensed and runs on your own hardware.</p></div>
+          </details>
+          <details>
+            <summary>Who makes AgentPass?</summary>
+            <div><p>AgentPass was created by Torben Wetter and is developed in the open on GitHub. Issues and contributions are welcome.</p></div>
+          </details>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <footer class="site-footer" id="footer">
+    <div class="container">
+      <div class="footer-cta">
+        <h2>Let your agent act. Keep the keys.</h2>
+        <p class="muted">Set it up in an afternoon, on a machine you already have.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="#quickstart">Get started</a>
+          <a class="btn" href="https://github.com/Anima-t3d/agentpass">View on GitHub</a>
+        </div>
+      </div>
+      <div class="footer-meta">
+        <p>AgentPass is MIT licensed. Created by Torben Wetter: <a href="https://github.com/TorbenWetter/agentpass">original project</a>.</p>
+        <p><a href="https://github.com/Anima-t3d/agentpass">Source on GitHub</a></p>
+      </div>
+    </div>
+  </footer>
 </body>
 </html>
