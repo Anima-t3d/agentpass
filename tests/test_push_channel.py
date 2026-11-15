@@ -20,6 +20,7 @@ from agentpass.approval import (
     ApprovalCoordinator,
     ApprovalReason,
     ApprovalRequest,
+    ChannelUnavailable,
     build_channels,
 )
 from agentpass.approval.coordinator import satisfies
@@ -161,6 +162,18 @@ async def test_send_without_devices_raises(env):
     with pytest.raises(RuntimeError, match="no push devices"):
         await env.push.send(_req())
     assert env.transport.calls == []
+
+
+async def test_unavailable_push_channel_is_skipped_with_one_info_line(env, caplog):
+    assert issubclass(ChannelUnavailable, RuntimeError)
+    with pytest.raises(ChannelUnavailable, match="no push devices"):
+        await env.push.send(_req())
+    with caplog.at_level(logging.INFO, logger="agentpass"):
+        assert await env.coordinator._send(env.push, _req()) is None
+    [record] = [r for r in caplog.records if "skipped" in r.getMessage()]
+    assert record.levelno == logging.INFO and record.exc_info is None
+    assert record.getMessage() == "Approval channel push skipped P1: no push devices"
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 async def test_payload_has_only_allowed_fields_and_no_args(env):
@@ -406,7 +419,7 @@ async def test_missing_vapid_key_makes_send_raise(tmp_path, caplog):
         await push.start(AsyncMock())
     assert any("vapid" in r.getMessage().lower() for r in caplog.records)
     assert await push.health_check() is False
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ChannelUnavailable, match="VAPID"):
         await push.send(_req())
     await push.stop()
     await db.close()

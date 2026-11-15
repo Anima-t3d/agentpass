@@ -9,6 +9,7 @@ from agentpass.approval.channel import (
     ApprovalRequest,
     ApprovalSink,
     ChannelHandle,
+    ChannelUnavailable,
     NoChannelError,
     RememberOffer,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalSink",
     "ChannelHandle",
+    "ChannelUnavailable",
     "NoChannelError",
     "RememberOffer",
     "build_channels",

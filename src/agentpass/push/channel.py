@@ -31,6 +31,7 @@ from agentpass.approval.channel import (
     ApprovalRequest,
     ApprovalSink,
     ChannelHandle,
+    ChannelUnavailable,
 )
 from agentpass.passkey.page import ApprovalPage
 from agentpass.passkey.verify import parse_expiry
@@ -127,10 +128,10 @@ class PushChannel(ApprovalChannel):
 
     async def send(self, req: ApprovalRequest) -> ChannelHandle:
         if self._key is None:
-            raise RuntimeError("push channel has no VAPID key")
+            raise ChannelUnavailable("push channel has no VAPID key")
         devices = await self.db.list_push_devices()
         if not devices:
-            raise RuntimeError("no push devices")
+            raise ChannelUnavailable("no push devices")
         expires_at = parse_expiry(req.expires_at)
         self._pending[req.approval_id] = req
         title = _clip(f"{req.agent_name or req.agent_id} → {req.tool}")
