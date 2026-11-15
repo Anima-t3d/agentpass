@@ -380,12 +380,21 @@ class ApprovalPage:
 
     # --- sign-in ---
 
+    def enrolled(self, credential_id: str) -> bool:
+        """Whether the passkey is still enrolled. Removing it from the store revokes it."""
+        return bool(credential_id) and self.store.get(credential_id) is not None
+
     def require_session(self, request: web.Request) -> Session:
         """The caller's live page session, or a 401 ``{"error": "sign in"}``.
 
         A session only opens read views. It never stands in for an approval's assertion.
+        It ends as soon as the passkey that opened it is no longer enrolled.
         """
-        session = self.sessions.get(request.cookies.get(SESSION_COOKIE, ""))
+        token = request.cookies.get(SESSION_COOKIE, "")
+        session = self.sessions.get(token)
+        if session is not None and not self.enrolled(session.credential_id):
+            self.sessions.drop(token)
+            session = None
         if session is None:
             raise web.HTTPUnauthorized(
                 text=json.dumps({"error": "sign in"}), content_type="application/json"

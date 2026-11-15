@@ -7,8 +7,10 @@ it is sent with its own subscription keys, as the browser would.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -32,6 +34,7 @@ from agentpass.models import Decision
 from agentpass.passkey.channel import PasskeyChannel
 from agentpass.passkey.page import PasskeyConfig
 from agentpass.passkey.session import SESSION_COOKIE
+from agentpass.passkey.store import Credential
 from agentpass.pipeline import ApprovalDenied, Pipeline
 from agentpass.preview import Preview, Unavailable
 from agentpass.push.channel import PushChannel
@@ -87,13 +90,23 @@ class Env:
         self.transport, self.coordinator, self.client = transport, coordinator, client
         self.n = 0
 
-    async def device(self, label="Pixel 8", one_tap=False) -> tuple[PushDevice, Subscriber]:
+    async def device(
+        self, label="Pixel 8", one_tap=False, credential="c"
+    ) -> tuple[PushDevice, Subscriber]:
         self.n += 1
         sub = Subscriber(f"https://push.example.com/send/{self.n}")
         now = "2026-11-15T00:00:00Z"
         device = await self.db.upsert_push_device(
             PushDevice(
-                f"dev{self.n}", label, sub.endpoint, sub.p256dh, sub.auth, False, "c", now, now
+                f"dev{self.n}",
+                label,
+                sub.endpoint,
+                sub.p256dh,
+                sub.auth,
+                False,
+                credential,
+                now,
+                now,
             )
         )
         if one_tap:
@@ -122,6 +135,7 @@ async def env(tmp_path):
     await db.initialize()
     transport = FakeTransport()
     passkey = PasskeyChannel(cfg, db=db)
+    passkey.store.add(Credential(id="c", public_key="AA"))  # the passkey test devices belong to
     push = PushChannel(cfg.push, page=passkey.page, db=db, transport=transport)
     telegram = FakeChannel("telegram")
     coordinator = ApprovalCoordinator(db, [passkey, push, telegram])
@@ -407,13 +421,15 @@ async def test_push_timeout_bounds_an_injected_transport(tmp_path, caplog):
     db = Database(str(tmp_path / "agentpass.db"))
     await db.initialize()
     transport = FakeTransport()
-    page = PasskeyChannel(cfg, db=db).page
+    passkey = PasskeyChannel(cfg, db=db)
+    passkey.store.add(Credential(id="c", public_key="AA"))
+    page = passkey.page
     push = PushChannel(cfg.push, page=page, db=db, transport=transport)
     await push.start(AsyncMock())
     sub = Subscriber("https://push.example.com/slow")
     now = "t"
     await db.upsert_push_device(
-        PushDevice("d", "D", sub.endpoint, sub.p256dh, sub.auth, False, "", now, now)
+        PushDevice("d", "D", sub.endpoint, sub.p256dh, sub.auth, False, "c", now, now)
     )
     transport.delay[sub.endpoint] = 30
     with caplog.at_level(logging.DEBUG):
@@ -447,7 +463,7 @@ async def test_missing_vapid_key_makes_send_raise(tmp_path, caplog):
 async def test_vapid_endpoint_requires_a_session(env):
     r = await env.client.get("/api/push/vapid", headers={"Host": HOST})
     assert r.status == 401
-    token = env.passkey.page.sessions.create("cred-1")
+    token = env.passkey.page.sessions.create("c")  # the enrolled test passkey
     r = await env.client.get(
         "/api/push/vapid", headers={"Host": HOST, "Cookie": f"{SESSION_COOKIE}={token}"}
     )
@@ -561,3 +577,39 @@ def test_clip_never_cuts_an_escape_and_stays_within_the_limit():
     assert len(_clip("\u202e" * 100)) <= TEXT_LIMIT
     assert _clip("short \u202e") == "short \\u202e"
     assert _clip("y" * 300) == "y" * (TEXT_LIMIT - 1) + "…"
+
+
+# --- revoked passkeys ---
+
+
+def _revoke_all(env) -> None:
+    Path(env.passkey.store.path).write_text(json.dumps({"credentials": []}))
+
+
+async def test_device_of_a_revoked_passkey_gets_no_notification(env):
+    _, kept = await env.device("Pixel 8")
+    _, orphan = await env.device("Old phone", credential="removed")
+    task = _ask(env, _req())
+    await env.action("P1", "deny", (await env.pushed(kept))["token"])
+    await task
+    await env.pushed(kept, "resolved")
+    assert env.transport.bodies(orphan) == []  # neither the request nor its resolution
+
+
+async def test_send_raises_when_every_device_belongs_to_a_revoked_passkey(env):
+    await env.device(credential="removed")
+    with pytest.raises(RuntimeError, match="no push devices"):
+        await env.push.send(_req())
+    assert env.transport.calls == []
+
+
+async def test_revoking_the_passkey_disables_a_sent_notification(env):
+    _, sub = await env.device(one_tap=True)
+    task = _ask(env, _req())
+    token = (await env.pushed(sub))["token"]
+    _revoke_all(env)
+    for action in ("approve", "deny"):
+        r = await env.action("P1", action, token)
+        assert r.status == 401 and await r.json() == {"error": "invalid token"}
+    assert not task.done()
+    task.cancel()

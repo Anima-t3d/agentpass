@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from agentpass.passkey.page import FAILURE_LIMIT
 from agentpass.passkey.session import (
@@ -233,3 +234,14 @@ def test_page_script_signs_in_on_401():
         "Sign in with passkey",
     ):
         assert needle in js, needle
+
+
+async def test_revoked_passkey_ends_its_session(env):  # noqa: F811
+    await env.sign_in()
+    token = env.session
+    assert (await env.get("/api/pending")).status == 200
+    Path(env.store.path).write_text(json.dumps({"credentials": []}))  # operator removes the key
+    r = await env.get("/api/pending")
+    assert r.status == 401 and await r.json() == {"error": "sign in"}
+    assert env.channel.page.sessions.get(token) is None  # dropped, not just refused
+    assert (await env.get("/api/history")).status == 401

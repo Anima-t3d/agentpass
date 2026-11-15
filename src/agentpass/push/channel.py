@@ -134,7 +134,7 @@ class PushChannel(ApprovalChannel):
     async def send(self, req: ApprovalRequest) -> ChannelHandle:
         if self._key is None:
             raise ChannelUnavailable("push channel has no VAPID key")
-        devices = await self.db.list_push_devices()
+        devices = await self._devices()
         if not devices:
             raise ChannelUnavailable("no push devices")
         expires_at = parse_expiry(req.expires_at)
@@ -175,8 +175,13 @@ class PushChannel(ApprovalChannel):
             "approved": bool(outcome.approved),
             "reason": str(outcome.reason),
         }
-        for device in await self.db.list_push_devices():
+        for device in await self._devices():
             self._schedule(device, payload, RESOLVED_TTL)
+
+    async def _devices(self) -> list[PushDevice]:
+        """Subscribed devices whose passkey is still enrolled; the rest get nothing."""
+        devices = await self.db.list_push_devices()
+        return [d for d in devices if self.page.enrolled(d.credential_id)]
 
     def _schedule(self, device: PushDevice, payload: dict[str, Any], ttl: int) -> None:
         task = asyncio.create_task(self._deliver(device, payload, ttl))
@@ -269,6 +274,9 @@ class PushChannel(ApprovalChannel):
         device = await self.db.get_push_device(device_id)
         if device is None:
             logger.info("Push action refused for %s: device removed", approval_id)
+            return _error(401, {"error": "invalid token"})
+        if not self.page.enrolled(device.credential_id):
+            logger.info("Push action refused for %s: device passkey revoked", approval_id)
             return _error(401, {"error": "invalid token"})
         await self.db.touch_push_device(device.device_id)
         approved = action == "approve"
