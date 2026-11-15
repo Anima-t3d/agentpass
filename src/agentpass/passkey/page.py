@@ -38,6 +38,7 @@ from webauthn.helpers.structs import (
 
 from agentpass.approval.channel import Answer, AnswerStatus
 from agentpass.config import LOOPBACK_HOSTS, ConfigError
+from agentpass.dashboard.query import entry_to_dict, parse_filters
 from agentpass.models import AuditEntry
 from agentpass.passkey import assets, pwa_assets
 from agentpass.passkey.pwa_icons import ICONS
@@ -243,6 +244,7 @@ class ApprovalPage:
         app.router.add_post("/api/login", self._login)
         app.router.add_post("/api/logout", self._logout)
         app.router.add_get("/api/pending", self._list_pending)
+        app.router.add_get("/api/history", self._history)
         app.router.add_post("/api/approvals/{id}/challenge", self._challenge)
         app.router.add_post("/api/approvals/{id}/approve", self._approve)
         app.router.add_post("/api/approvals/{id}/deny", self._deny)
@@ -452,6 +454,26 @@ class ApprovalPage:
         return response
 
     # --- approvals ---
+
+    async def _history(self, request: web.Request) -> web.Response:
+        """The audit log for the History tab: same filters and shape as the admin dashboard."""
+        self.require_session(request)
+        filters = parse_filters(request.query)
+        per_page, page = filters.pop("per_page"), filters.pop("page")
+        entries, total = [], 0
+        if self.db is not None:
+            entries, total = await self.db.get_audit_log_filtered(
+                limit=per_page, offset=(page - 1) * per_page, **filters
+            )
+        return _json(
+            {
+                "entries": [entry_to_dict(e) for e in entries],
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "pages": max(1, (total + per_page - 1) // per_page),
+            }
+        )
 
     async def _list_pending(self, request: web.Request) -> web.Response:
         self.require_session(request)
