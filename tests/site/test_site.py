@@ -45,7 +45,10 @@ DENYLIST = [
     "@gmail.com",
 ]
 PRIVATE_TERMS_FILE = Path(__file__).with_name("private_terms.txt")
-UNRELEASED_TERMS = ["pwa", "push notification", "gh_mirror_fetch", "git mirror"]
+# Terms for features not on main yet; they may only appear inside .soon.
+UNRELEASED_TERMS: list[str] = []
+# Features that reached main (2026-11-15): listed, never as Coming soon.
+SHIPPED_TERMS = ["push notification", "mirror"]
 
 HEADLINE = "Let your AI agents act. Keep the keys."
 SUBHEAD = (
@@ -571,3 +574,11 @@ def test_hero_signature_matches_tool():
     )
     sig = next(e for e in parse().elements if "signature" in e.classes)
     assert sig.text == expected
+
+
+def test_shipped_features_are_listed_without_coming_soon():
+    texts = parse().texts
+    for term in SHIPPED_TERMS:
+        hits = [in_soon for data, in_soon in texts if term in data.lower()]
+        assert hits, f"{term!r} is not on the page"
+        assert not any(hits), f"{term!r} is still inside .soon"

@@ -103,7 +103,7 @@
           <li><strong>The request comes to your phone.</strong> Approve or deny with a tap in Telegram, or open the approval page and confirm with your passkey.</li>
           <li><strong>Safe calls never wait.</strong> Rules per tool and per argument decide what's allowed, what asks you and what's denied. Reading an issue goes through; posting a comment asks.</li>
           <li><strong>Answer once, not every time.</strong> “Allow always” and “Deny always” remember a decision for the exact call or the tool, within limits the gateway checks.</li>
-          <li class="soon"><span class="soon-badge">Coming soon</span><br><strong>An installable approval app with push notifications.</strong> The notification says what's being asked, with Approve and Deny right on it, and the app keeps your approval history.</li>
+          <li><strong>Or install the approval app.</strong> Its push notifications say what's being asked. Deny right on the notification; Approve opens the request for your passkey, or answers in one tap on devices you allow. The app keeps your approval history.</li>
         </ul>
       </div>
     </section>
@@ -167,10 +167,9 @@
           <li class="reveal"><p>You read it, then approve or deny.</p></li>
           <li class="reveal"><p>The gateway posts it with its own token. The call is in the audit log.</p></li>
         </ol>
-        <div class="soon steps-soon">
-          <span class="soon-badge">Coming soon</span>
-          <h3>Secure clone of a private repo</h3>
-          <p>Approve an update for one exact commit, shown before you approve. The gateway fetches it into a read-only mirror the agent can pull from, with no token on the agent.</p>
+        <div class="steps-more">
+          <h3>Private repos, without a token on the agent</h3>
+          <p>To pull a private repo, the agent asks to update a read-only mirror to one exact commit. You see the repo, branch, commit and its headline before you approve. The gateway fetches it, and the agent pulls from the mirror with plain git.</p>
         </div>
       </div>
     </section>
@@ -246,8 +245,8 @@
           <div class="feature"><h3>Agents connect their way</h3><p>Unix socket, WebSocket or MCP, a CLI and a Python SDK. One token and one rule set per agent.</p></div>
           <div class="feature"><h3>Any HTTP API in YAML</h3><p>Tools are declared in YAML: arguments, validation, request and preview. GitHub, Gmail, Calendar, Drive and Home Assistant ship ready to use.</p></div>
           <div class="feature"><h3>Offline config check</h3><p><code>agentpass check-config</code> catches broken rules, missing previews and unsafe settings before you start.</p></div>
-          <div class="feature soon"><span class="soon-badge">Coming soon</span><h3>Approval app with push notifications</h3><p>An installable PWA: Approve and Deny on the notification, history in your pocket.</p></div>
-          <div class="feature soon"><span class="soon-badge">Coming soon</span><h3>Git mirror</h3><p>Pull private repos into a read-only mirror, one approved commit at a time, with no token on the agent.</p></div>
+          <div class="feature"><h3>Approval app with push notifications</h3><p>Install the approval page as an app. Deny from the notification, Approve in one tap on devices you allow, and keep your history at hand.</p></div>
+          <div class="feature"><h3>Git mirror</h3><p>Pull private repos from a read-only mirror, updated to one approved commit at a time, with no token on the agent.</p></div>
         </div>
       </div>
     </section>

@@ -660,12 +660,16 @@ html.js .approval[data-step="2"] .fake-approve {
   font-size: 0.97rem;
 }
 
-.steps-soon {
+.steps-more {
   margin-top: 1.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.2rem;
+  background: var(--surface);
 }
 
-.steps-soon ol {
-  margin: 0.4rem 0 0;
+.steps-more > :last-child {
+  margin-bottom: 0;
 }
 
 /* Only the GitHub steps reveal on scroll, one after another. */
