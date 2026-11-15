@@ -90,3 +90,22 @@ async def test_history_filters_by_date_range(env):  # noqa: F811
     ):
         data = await (await env.get(f"/api/history?{params}")).json()
         assert data["total"] == expected, params
+
+
+async def test_history_leaves_out_call_arguments(env):  # noqa: F811
+    await env.db.log_audit(
+        AuditEntry(
+            request_id="r9",
+            tool_name="gmail_send",
+            args={"to": "someone@example.com", "body": "private text"},
+            signature="gmail_send(someone@example.com)",
+            decision="ask",
+            agent_id="hermes",
+        )
+    )
+    await env.sign_in()
+    r = await env.get("/api/history")
+    (entry,) = (await r.json())["entries"]
+    assert "args" not in entry
+    assert "private text" not in await r.text()
+    assert entry["signature"] == "gmail_send(someone@example.com)"  # what the table shows

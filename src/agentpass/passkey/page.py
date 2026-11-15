@@ -476,7 +476,7 @@ class ApprovalPage:
             )
         return _json(
             {
-                "entries": [entry_to_dict(e) for e in entries],
+                "entries": [_history_entry(e) for e in entries],
                 "total": total,
                 "page": page,
                 "per_page": per_page,
@@ -652,6 +652,16 @@ async def _body(request: web.Request) -> dict:
 
 def _b64d(value: str) -> bytes:
     return base64url_to_bytes(value)
+
+
+def _history_entry(entry: Any) -> dict[str, Any]:
+    """An audit row for the History tab: the dashboard shape without the call arguments.
+
+    The table shows the signature; the full arguments stay on the admin dashboard.
+    """
+    row = entry_to_dict(entry)
+    row.pop("args", None)
+    return row
 
 
 def _client_challenge(credential: Any) -> bytes | None:
