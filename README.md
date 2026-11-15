@@ -389,7 +389,7 @@ The passkey page is an aiohttp app on loopback. Publish it only on a private net
 
 ### Approval app (PWA) and push notifications
 
-The passkey page is also an installable web app with passkey sign-in, Web Push notifications that name what is being asked (Deny in one tap, Approve opens the app), a History tab over the audit log and a Devices list. Enable it with `passkey.push` and create the VAPID key with `agentpass push init-keys --config config.yaml`. One-tap approve is a per-device opt-in that never applies to `require: passkey` rules. See [docs/PWA.md](docs/PWA.md).
+The passkey page is also an installable web app with passkey sign-in, Web Push notifications that name what is being asked (Deny in one tap, Approve opens the app), a History tab over the audit log and a Devices list. Enable it with `passkey.push` and create the VAPID key with `agentpass push init-keys --config config.yaml`. One-tap approve is a per-device opt-in that never applies to `require: passkey` rules. Opening the passkey page from a Telegram or webhook link now needs a passkey sign-in first (once per 12 hours idle, or 7 days), followed by the approval's own passkey touch. See [docs/PWA.md](docs/PWA.md).
 
 ### Approval previews
 

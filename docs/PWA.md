@@ -43,6 +43,8 @@ sudo -u agentpass agentpass push init-keys --config /etc/agentpass/config.yaml
 
 The command creates the key at `vapid_key_path` with mode 0600 if it does not exist, and prints `VAPID public key: <base64url>`. If the key already exists it is left untouched and the same public key is printed, so the command is safe to repeat. It never prints the private key and works while `push.enabled` is still false, so you can create the key before enabling push. Restart the gateway after enabling push.
 
+Create the key before you enable push. With `push.enabled: true` and no readable key file the push channel reports itself unhealthy, so `/healthz` reports the gateway unhealthy (push channel health false). `agentpass check-config` warns about this case.
+
 ## Installing the app
 
 Open the page origin in the browser, sign in with your passkey, then:
@@ -57,6 +59,8 @@ Turning on notifications on a device registers it in the **Devices** tab.
 ## Sign-in
 
 The app signs in with a passkey assertion against the enrolled passkeys. The session is a cookie (`HttpOnly; Secure; SameSite=Strict; Path=/`) that expires after 12 hours without use or 7 days after sign-in, whichever comes first; the cookie's `Max-Age` is the 7 day limit. Sessions live in the gateway's memory, so a gateway restart signs everyone out.
+
+Opening the passkey page from a Telegram or webhook approval link needs a passkey sign-in first (once per 12 hours idle or 7 days), and then the approval's own passkey touch. The **Sign out** button in the header ends the session and returns to the sign-in panel.
 
 A session only opens read views (pending requests, History, Devices) and manages notification devices. It never approves anything by itself: every in-app Approve still needs its own WebAuthn assertion bound to that request. The admin bearer token of the audit dashboard is never used or exposed by the app.
 
