@@ -265,3 +265,26 @@ test('an unrelated message does not retry', async () => {
   h.handlers.message(h.evt({data: {type: 'something'}}));
   assert.equal(h.waits.length, 0);
 });
+
+test('a tap during an in-flight retry does not post the same approval twice', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const posts = [];
+  const h = harness({
+    items: [{approval_id: 'a1', action: 'deny', token: 'tok', expires_at: 2000}],
+    fetchImpl: async (url, init) => {
+      posts.push(JSON.parse(init.body).approval_id);
+      await gate;
+      return new Response('{}', {status: 200});
+    },
+  });
+  h.handlers.sync(h.evt({tag: 'agentpass-actions'}));
+  await new Promise((r) => setTimeout(r, 0));  // the retry's post is now in flight
+  click(h, 'deny', payload());
+  await new Promise((r) => setTimeout(r, 0));
+  release();
+  await Promise.all(h.waits);
+  assert.deepEqual(posts, ['a1']);
+  assert.equal(h.shown.length, 0);  // no "could not send" notice over the success
+  assert.equal(h.store.items.size, 0);
+});

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from agentpass.models import AuditEntry
 from tests.test_passkey import env  # noqa: F401
 
@@ -74,3 +76,17 @@ async def test_history_without_a_database_is_empty(env):  # noqa: F811
     env.channel.page.db = None
     data = await (await env.get("/api/history")).json()
     assert data["entries"] == [] and data["total"] == 0
+
+
+async def test_history_filters_by_date_range(env):  # noqa: F811
+    await _seed(env.db)
+    await env.sign_in()
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    for params, expected in (
+        (f"from={day}&to={day}T23:59:59", 4),
+        (f"from={day}T00:00:00", 4),
+        ("to=2000-01-01", 0),
+        ("from=2999-01-01", 0),
+    ):
+        data = await (await env.get(f"/api/history?{params}")).json()
+        assert data["total"] == expected, params

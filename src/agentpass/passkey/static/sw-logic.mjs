@@ -113,6 +113,7 @@ async function sendAction(env, item) {
 
 export function setup(self, env) {
   let retrying = null;
+  const settled = new Set();  // approvals whose action already got a final answer
 
   const notice = (id, title, body) => self.registration.showNotification(title, {
     body, tag: id, requireInteraction: false, data: {type: 'notice', approval_id: id},
@@ -155,10 +156,15 @@ export function setup(self, env) {
   async function doClick(action, payload) {
     const d = decideClick(action, payload);
     if (d.kind === 'open') return openUrl(d.url);
+    // A retry may be posting this very approval's queued action: let it finish, and do not
+    // post a second time if it got a final answer (the token is single use).
+    if (retrying) await retrying.catch(() => {});
+    if (settled.has(payload.approval_id)) return undefined;
     const item = {approval_id: payload.approval_id, action: d.action, token: payload.token,
       expires_at: payload.expires_at};
     const outcome = await sendAction(env, item);
     if (outcome.result === 'offline') return queueOffline(item);
+    settled.add(item.approval_id);
     return afterSend(item, outcome);
   }
 
@@ -177,6 +183,7 @@ export function setup(self, env) {
         }
         const outcome = await sendAction(env, item);
         if (outcome.result === 'offline') { clear = false; break; }
+        settled.add(item.approval_id);
         await env.store.delete(item.approval_id);
         await afterSend(item, outcome);
       }

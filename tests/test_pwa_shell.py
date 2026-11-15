@@ -123,6 +123,10 @@ def test_app_script_has_history_and_devices_views():
         "retry-actions",
         "' (notification)'",
         "'Resolved by'",
+        "'Result'",
+        "type: 'date'",
+        "q.set('from', hv.from)",
+        "No history loaded yet.",
     ):
         assert needle in js, needle
     assert "innerHTML" not in js and "outerHTML" not in js and "insertAdjacentHTML" not in js

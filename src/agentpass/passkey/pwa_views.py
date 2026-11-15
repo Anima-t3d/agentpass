@@ -83,7 +83,17 @@ function viewsSignedIn() {  // the 5 s poll saw a live session again
 }
 
 /* ---- History ---- */
-const hv = {page: 1, agent: '', tool: '', decision: '', data: null, built: false};
+const hv = {page: 1, agent: '', tool: '', decision: '', from: '', to: '', data: null, built: false};
+
+/* Short outcome of the run: execution_result is null when nothing ran, {reason} for a refusal. */
+function resultLabel(e) {
+  const r = e.execution_result;
+  if (r === null || r === undefined) return '\u2014';
+  if (typeof r !== 'object') return String(r).slice(0, 80);
+  if (typeof r.error === 'string') return ('error: ' + r.error).slice(0, 80);
+  if (typeof r.reason === 'string') return r.reason.slice(0, 80);
+  return 'ok';
+}
 
 function decisionLabel(e) {
   if (typeof e.request_id === 'string' && e.request_id.startsWith('one-tap:')) {
@@ -111,10 +121,9 @@ function resolvedByLabel(v) {
   }
   return v;
 }
-/* Audit rows carry epoch seconds, device rows ISO strings. */
-function stamp(when) {
-  const d = new Date(typeof when === 'number' ? when * 1000 : when);
-  return isNaN(d) ? String(when || '') : d.toLocaleString([], {dateStyle: 'short', timeStyle: 'medium'});
+function stamp(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso || '') : d.toLocaleString([], {dateStyle: 'short', timeStyle: 'medium'});
 }
 
 function buildHistory() {
@@ -125,18 +134,20 @@ function buildHistory() {
   const decision = h('select', {cls: 'input', name: 'decision'},
     h('option', {value: '', text: 'Any'}), h('option', {value: 'ask', text: 'Asked'}),
     h('option', {value: 'allow', text: 'Allowed'}), h('option', {value: 'deny', text: 'Denied'}));
+  const from = h('input', {cls: 'input', type: 'date', name: 'from'});
+  const to = h('input', {cls: 'input', type: 'date', name: 'to'});
   const apply = h('button', {cls: 'btn btn-primary', type: 'submit'}, h('span', {text: 'Filter'}));
   const form = h('div', {cls: 'tools', role: 'search'}, field('Agent', agent), field('Tool', tool),
-    field('Decision', decision), apply);
+    field('Decision', decision), field('From', from), field('To', to), apply);
   const run = () => {
     hv.agent = agent.value.trim(); hv.tool = tool.value.trim();
-    hv.decision = decision.value; hv.page = 1; loadHistory();
+    hv.decision = decision.value; hv.from = from.value; hv.to = to.value; hv.page = 1; loadHistory();
   };
   apply.addEventListener('click', run);
   for (const el of [agent, tool]) {
     el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') run(); });
   }
-  decision.addEventListener('change', run);
+  for (const el of [decision, from, to]) el.addEventListener('change', run);
   panel.replaceChildren(h('h2', {cls: 'page-title', text: 'History'}), form,
     h('div', {id: 'history-body', 'aria-live': 'polite'}));
   hv.built = true;
@@ -149,11 +160,16 @@ async function loadHistory() {
   if (hv.agent) q.set('agent_id', hv.agent);
   if (hv.tool) q.set('tool_name', hv.tool);
   if (hv.decision) q.set('decision', hv.decision);
+  if (hv.from) q.set('from', hv.from);
+  if (hv.to) q.set('to', hv.to + 'T23:59:59');  // the whole last day
   try {
     hv.data = await api('/api/history?' + q);
   } catch (e) {
     viewError(box, e, 'the history');
-    if (hv.data && !(e && e.status === 401)) drawHistory(box, true);  // keep the last view
+    if (e && e.name === 'TypeError') {
+      if (hv.data) drawHistory(box, true);  // keep the last view
+      else box.replaceChildren(h('p', {cls: 'device-meta', text: 'No history loaded yet.'}));
+    }
     return;
   }
   offline(false);
@@ -167,13 +183,13 @@ function drawHistory(box, stale) {
     text: 'Showing the last loaded history. It will refresh when the gateway is reachable.'}));
   if (!d.entries.length) {
     nodes.push(h('div', {cls: 'card empty'}, icon('clock'), h('h2', {text: 'Nothing here'}),
-      h('p', {text: hv.agent || hv.tool || hv.decision
+      h('p', {text: hv.agent || hv.tool || hv.decision || hv.from || hv.to
         ? 'No entries match these filters.' : 'Past approvals will be listed here.'})));
     box.replaceChildren(...nodes);
     paintIcons(box);
     return;
   }
-  const head = h('tr', null, ...['Time', 'Agent', 'Tool', 'Signature', 'Decision', 'Resolved by']
+  const head = h('tr', null, ...['Time', 'Agent', 'Tool', 'Signature', 'Decision', 'Result', 'Resolved by']
     .map((t) => h('th', {scope: 'col', text: t})));
   const rows = d.entries.map((e) => {
     const dec = decisionLabel(e);
@@ -183,6 +199,7 @@ function drawHistory(box, stale) {
       h('td', {text: e.tool_name || ''}),
       h('td', {cls: 'sig', text: e.signature || ''}),
       h('td', {cls: dec.tone, text: dec.text}),
+      h('td', {text: resultLabel(e)}),
       h('td', {text: resolvedByLabel(e.resolved_by)}));
   });
   nodes.push(h('div', {cls: 'tablewrap'}, h('table', {cls: 'hist'},
