@@ -83,7 +83,7 @@ When the app cannot reach the origin it shows a "Not connected to Tailscale" ban
 
 ## History
 
-The History tab shows the audit log: who asked, which tool, the decision, how and by whom it was resolved (for example the channel and device label), when, and the result. It can be filtered by agent, tool, decision, date and result, is paginated, and is read-only. It needs a signed-in session.
+The History tab shows the audit log: who asked, which tool, the decision, how and by whom it was resolved (for example the channel and device label), when, and the result. It can be filtered by agent, tool, decision and date range, is paginated, and is read-only. It needs a signed-in session.
 
 ## Devices
 
