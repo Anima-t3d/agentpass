@@ -1,0 +1,16 @@
+# Example socket for the git-mirror helper (agentpass.gitmirror.helper).
+# One helper process per connection (Accept=yes). Only members of agentgit-clients
+# (the user AgentPass runs as) can connect. Adjust users, groups and paths to your host.
+[Unit]
+Description=AgentPass git mirror helper socket
+
+[Socket]
+ListenStream=/run/agentgit/helper.sock
+SocketUser=agentgit
+SocketGroup=agentgit-clients
+SocketMode=0660
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

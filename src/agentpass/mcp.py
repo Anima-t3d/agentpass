@@ -20,7 +20,7 @@ from aiohttp import web
 
 from agentpass.agents import AgentIdentity, AgentRegistry
 from agentpass.db import Database
-from agentpass.pipeline import Outcome, Pipeline, PipelineError
+from agentpass.pipeline import INTERNAL_MESSAGE, Outcome, Pipeline, PipelineError
 from agentpass.preview import sanitize_note
 from agentpass.registry import ToolRegistry
 from agentpass.schema import input_schema, tool_annotations, with_gateway_properties
@@ -49,7 +49,9 @@ GATEWAY_TOOLS: list[dict[str, Any]] = [
         "name": "gateway_result",
         "description": (
             "Fetch the result of an earlier call that returned pending_approval. "
-            "Waits up to wait_seconds for the human decision."
+            "Waits up to wait_seconds for the human decision or the call to finish. "
+            "status executing: approved and still running, which can take minutes; "
+            "keep polling with wait_seconds until it reports the result."
         ),
         "inputSchema": {
             "type": "object",
@@ -300,16 +302,28 @@ class McpServer:
         This runs in its own task, so the result is stored whether or not the HTTP
         request that started it is still waiting. A pipeline error is the task's
         *result*, never an exception: the request may have returned `pending_approval`
-        and left, and nobody would retrieve it.
+        and left, and nobody would retrieve it. Any other exception is logged and becomes
+        a fixed ``internal_error``, stored on the pending row if one exists.
         """
+        seen: list[str] = []
+
+        def track(request_id: str, expires_at: float) -> None:
+            seen.append(request_id)
+            on_pending(request_id, expires_at)
+
         try:
             outcome = await self._pipeline.process(
-                identity, name, args, key, on_pending=on_pending, agent_note=note
+                identity, name, args, key, on_pending=track, agent_note=note
             )
         except PipelineError as e:
             if e.awaiting_delivery and e.request_id:
                 await self._pipeline.store_undelivered(e.request_id, e)
             return e
+        except Exception:
+            logger.exception("MCP tool call %s failed unexpectedly", name)
+            if not seen:
+                return PipelineError(INTERNAL_MESSAGE)
+            return await self._pipeline.store_internal_error(seen[0])
         if outcome.awaiting_delivery:
             await self._pipeline.store_undelivered(outcome.request_id, outcome)
         return outcome
@@ -375,6 +389,12 @@ class McpServer:
                 await asyncio.wait({task}, timeout=min(wait, MAX_WAIT_SECONDS))
                 row = await self._lookup(identity.id, request_id)
         if row["result"] is None:
+            if row["state"] == "resolved":  # approved, still running: expires_at is over
+                return {
+                    "status": "executing",
+                    "request_id": request_id,
+                    "retry": "call gateway_result",
+                }
             if row["expires_at"] <= _iso(time.time()):
                 return self._stored(request_id, _TIMEOUT_PAYLOAD)
             return {

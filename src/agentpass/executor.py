@@ -11,7 +11,15 @@ if TYPE_CHECKING:
 
 
 class ExecutionError(Exception):
-    """Raised when tool dispatch or execution fails."""
+    """Raised when tool dispatch or execution fails.
+
+    ``public=True`` marks the message as fixed text that is safe to show the agent in
+    a stored (polled) result. Without it a stored result only says "Execution failed".
+    """
+
+    def __init__(self, *args: object, public: bool = False) -> None:
+        super().__init__(*args)
+        self.public = public
 
 
 class Executor:

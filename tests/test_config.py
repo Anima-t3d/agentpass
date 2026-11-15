@@ -336,6 +336,33 @@ class TestLoadConfig:
         cfg = load_config(str(p))
         assert cfg.services["homeassistant"].auth.token == "ha-secret-from-env"
 
+    def _with_service_extra(self, tmp_path, extra: str, handler: str = "http"):
+        yaml_text = VALID_CONFIG_YAML.replace(
+            "    tools: tools/homeassistant.yaml\n",
+            f"    handler: {handler}\n{extra}    tools: tools/homeassistant.yaml\n",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml_text)
+        return str(p)
+
+    def test_preview_lookups_defaults_false(self, config_file):
+        cfg = load_config(str(config_file))
+        assert cfg.services["homeassistant"].preview_lookups is False
+
+    def test_preview_lookups_parsed_on_python_service(self, tmp_path, _tools_dir):
+        path = self._with_service_extra(tmp_path, "    preview_lookups: true\n", "python")
+        assert load_config(path).services["homeassistant"].preview_lookups is True
+
+    def test_preview_lookups_rejected_on_http_service(self, tmp_path, _tools_dir):
+        path = self._with_service_extra(tmp_path, "    preview_lookups: true\n")
+        with pytest.raises(ConfigError, match="preview_lookups"):
+            load_config(path)
+
+    def test_preview_lookups_must_be_bool(self, tmp_path, _tools_dir):
+        path = self._with_service_extra(tmp_path, '    preview_lookups: "yes"\n', "python")
+        with pytest.raises(ConfigError, match="preview_lookups"):
+            load_config(path)
+
     def test_service_auth_parsed(self, config_file):
         """Auth config fields are parsed correctly."""
         cfg = load_config(str(config_file))

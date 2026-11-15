@@ -290,7 +290,14 @@ def test_passkey_error_does_not_depend_on_the_message_wording(tmp_path, monkeypa
     assert codes(report.errors) == ["approval-passkey"] and not report.warnings
 
 
-def _preview_config(tmp_path, tools_yaml: str, handler: str = "http"):
+def _preview_config(
+    tmp_path,
+    tools_yaml: str,
+    handler: str = "http",
+    extra: str = "",
+    url: str = "http://localhost",
+    auth: str = "{type: bearer, token: t}",
+):
     (tmp_path / "tools.yaml").write_text(tools_yaml)
     (tmp_path / "gateway.yaml").write_text(
         f"""\
@@ -299,7 +306,7 @@ gateway: {{health_port: 8210}}
 agent: {{token: t}}
 messenger: {{type: telegram, telegram: {{token: t, chat_id: 1, allowed_users: [1]}}}}
 services:
-  svc: {{url: 'http://localhost', auth: {{type: bearer, token: t}}, handler: {handler},
+  svc: {{url: '{url}', auth: {auth}, handler: {handler},{extra}
     tools: '{tmp_path / "tools.yaml"}'}}
 storage: {{type: sqlite, path: ./d.db}}
 """
@@ -336,6 +343,36 @@ def test_reserved_arg_name_is_a_config_error(tmp_path):
     assert any("reserved" in f.message for f in report.errors)
 
 
+LOOKUP_PREVIEW = PREVIEW_TOOL % (
+    'lookups: [{id: s, method: GET, path: "/s/{id}"}]\n      fields: [{label: a, value: b}]'
+)
+
+
+def test_python_service_with_preview_lookups_has_no_lookup_warning(tmp_path):
+    report = _preview_config(
+        tmp_path, LOOKUP_PREVIEW, handler="python", extra=" preview_lookups: true,"
+    )
+    assert "preview-lookup-unsupported" not in [f.code for f in report.warnings]
+
+
+def test_python_service_without_flag_still_warns(tmp_path):
+    report = _preview_config(tmp_path, LOOKUP_PREVIEW, handler="python")
+    assert "preview-lookup-unsupported" in [f.code for f in report.warnings]
+
+
+def test_python_unix_socket_service_with_auth_none_passes_check(tmp_path):
+    report = _preview_config(
+        tmp_path,
+        LOOKUP_PREVIEW,
+        handler="python",
+        extra=" preview_lookups: true,",
+        url="unix:///run/agentgit/helper.sock",
+        auth="{type: none}",
+    )
+    assert not report.errors
+    assert report.warnings == []
+
+
 def test_unimplemented_renderer_warns(tmp_path, monkeypatch):
     # Every built-in renderer ships now; simulate one that is declared but missing
     import agentpass.preview.service as service
@@ -368,3 +405,29 @@ def test_unknown_renderer_parameter_is_a_config_error(tmp_path):
 def test_clean_preview_block_passes(tmp_path):
     report = _preview_config(tmp_path, PREVIEW_TOOL % 'fields: [{label: Id, value: "{id}"}]')
     assert report.exit_code() == 0
+
+
+PUSH_BLOCK = (
+    "passkey: {enabled: true, rp_id: gate.example.org, origin: 'https://gate.example.org', "
+    "push: {enabled: true, subject: 'mailto:a@example.org', vapid_key_path: '%s'}}\n"
+)
+
+
+def test_push_enabled_without_vapid_key_warns(tmp_path):
+    key = tmp_path / "vapid.pem"
+    cfg, perms = write_setup(tmp_path, gateway_extra=PUSH_BLOCK % key)
+    report = check(cfg, perms, env={})
+    assert codes(report.warnings) == ["push-key-missing"] and not report.errors
+    msg = report.warnings[0].message
+    assert f"VAPID key {key} is missing" in msg
+    assert f"agentpass push init-keys --config {cfg}" in msg
+    key.write_text("pem")
+    assert check(cfg, perms, env={}).warnings == []
+
+
+def test_push_disabled_does_not_need_a_vapid_key(tmp_path):
+    extra = PUSH_BLOCK.replace("enabled: true, subject", "enabled: false, subject") % (
+        tmp_path / "none.pem"
+    )
+    report = check(*write_setup(tmp_path, gateway_extra=extra), env={})
+    assert report.warnings == [] and report.errors == []

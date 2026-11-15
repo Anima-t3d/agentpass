@@ -441,11 +441,17 @@ def _lint_previews(config: Config, registry: ToolRegistry, report: Report) -> No
                 )
             continue
         service = config.services.get(tool.service_name)
-        if spec.lookups and service is not None and service.handler != "http":
+        if (
+            spec.lookups
+            and service is not None
+            and service.handler != "http"
+            and not service.preview_lookups
+        ):
             report.warn(
                 "preview-lookup-unsupported",
                 where,
-                f"preview lookups need an http service; {tool.service_name!r} uses "
+                f"preview lookups need an http service or a python service with "
+                f"preview_lookups: true; {tool.service_name!r} uses "
                 f"handler {service.handler!r}, so the preview will be unavailable",
             )
         if spec.renderer not in IMPLEMENTED_RENDERERS:
@@ -455,6 +461,22 @@ def _lint_previews(config: Config, registry: ToolRegistry, report: Report) -> No
                 f"renderer {spec.renderer!r} is not implemented yet; the preview will be "
                 "unavailable",
             )
+
+
+def _lint_push_key(config: Config, report: Report, cfg_file: Path) -> None:
+    """Push enabled without a readable VAPID key leaves the push channel unhealthy."""
+    push = getattr(config.passkey, "push", None)
+    if push is None or not push.enabled:
+        return
+    path = Path(push.vapid_key_path)
+    if path.is_file() and os.access(path, os.R_OK):
+        return
+    report.warn(
+        "push-key-missing",
+        "passkey.push.vapid_key_path",
+        f"push is enabled but the VAPID key {path} is missing; run "
+        f"`agentpass push init-keys --config {cfg_file}` as the gateway user",
+    )
 
 
 def _lint_health_and_dashboard(config: Config, report: Report) -> None:
@@ -530,6 +552,7 @@ def check(config_path: str, permissions_path: str, env: dict[str, str] | None = 
     if config is not None:
         _lint_listen(config, report)
         _lint_health_and_dashboard(config, report)
+        _lint_push_key(config, report, cfg_file)
 
     agents: list[AgentIdentity] = []
     if config is not None:

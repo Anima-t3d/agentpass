@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -24,8 +25,9 @@ from agentpass.config import (
 from agentpass.db import Database
 from agentpass.engine import PermissionEngine
 from agentpass.executor import Executor
-from agentpass.mcp import McpServer
+from agentpass.mcp import GATEWAY_TOOLS, McpServer
 from agentpass.pipeline import (
+    INTERRUPTED_MESSAGE,
     ApprovalDenied,
     ApprovalTimeout,
     ApprovalUnavailable,
@@ -36,6 +38,7 @@ from agentpass.pipeline import (
     RateLimited,
     ServiceUnauthorized,
     UnknownTool,
+    interrupted_result,
 )
 from agentpass.registry import ToolRegistry
 from agentpass.services.base import ServiceHandler, ServiceUnauthorizedError
@@ -46,9 +49,12 @@ class FakeService(ServiceHandler):
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.fail: Exception | None = None
+        self.delay = 0.0
 
     async def execute(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((tool_name, args))
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if self.fail:
             raise self.fail
         return {"ok": True, "tool": tool_name}
@@ -384,6 +390,73 @@ class TestPendingThenResult:
         assert other["structuredContent"]["pending"] == []
 
 
+class TestExecutingAfterExpiry:
+    """An approved call keeps running past expires_at; it never reports approval_timeout."""
+
+    async def _row(self, env, request_id, *, expires_at, approved):
+        await env.db.insert_pending(
+            request_id, "ha_call_service", {}, "ha_call_service", expires_at, "alice"
+        )
+        if approved:
+            assert await env.db.transition_pending(request_id, "resolved")
+
+    async def test_gateway_result_executing_after_expiry(self, env):
+        await self._row(env, "run-1", expires_at="2020-01-01T00:00:00Z", approved=True)
+        res = (await call(env, "gateway_result", {"request_id": "run-1"}))["structuredContent"]
+        assert res == {
+            "status": "executing",
+            "request_id": "run-1",
+            "retry": "call gateway_result",
+        }
+
+    async def test_gateway_result_still_times_out_unapproved(self, env):
+        await self._row(env, "wait-1", expires_at="2020-01-01T00:00:00Z", approved=False)
+        res = (await call(env, "gateway_result", {"request_id": "wait-1"}))["structuredContent"]
+        assert res["status"] == "timeout" and res["error"]["code"] == "approval_timeout"
+
+    async def test_long_execution_delivers_result(self, env):
+        env.pipeline._approval_timeout = 1  # expires_at passes while the call still runs
+        env.service.delay = 2.5  # longer than inline_wait (0.2 s) and past expires_at
+        first = await _ask(env)
+        assert first["status"] == "pending_approval"
+        rid = first["request_id"]
+        await env.answer("allow")
+        await asyncio.sleep(1.3)
+        assert (await env.db.get_pending(rid))["expires_at"] <= _now_iso()
+        mid = (await call(env, "gateway_result", {"request_id": rid}))["structuredContent"]
+        assert mid["status"] == "executing" and mid["request_id"] == rid
+        done = (await call(env, "gateway_result", {"request_id": rid, "wait_seconds": 5}))[
+            "structuredContent"
+        ]
+        assert done["status"] == "executed" and done["data"]["ok"] is True
+        assert len(env.service.calls) == 1
+
+    async def test_interrupt_executing_at_startup(self, env):
+        await self._row(env, "run-1", expires_at="2099-01-01T00:00:00Z", approved=True)
+        await self._row(env, "wait-1", expires_at="2099-01-01T00:00:00Z", approved=False)
+        rows = await env.db.interrupt_executing(interrupted_result())
+        assert [r["request_id"] for r in rows] == ["run-1"]
+        res = (await call(env, "gateway_result", {"request_id": "run-1"}))["structuredContent"]
+        assert res["status"] == "error"
+        assert res["error"] == {
+            "code": "execution_interrupted",
+            "message": INTERRUPTED_MESSAGE,
+            "request_id": "run-1",
+        }
+        still = (await call(env, "gateway_result", {"request_id": "wait-1"}))["structuredContent"]
+        assert still["status"] == "pending_approval"
+        assert (await env.db.get_pending("wait-1"))["result"] is None
+
+    def test_gateway_result_description_mentions_executing(self):
+        tool = next(t for t in GATEWAY_TOOLS if t["name"] == "gateway_result")
+        assert "executing" in tool["description"]
+        assert "wait_seconds" in tool["description"]
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class TestGatewayAudit:
     async def test_audit_is_own_rows_only(self, env):
         await call(env, "ha_get_state", {"entity_id": "a.b"})
@@ -691,3 +764,92 @@ class TestSchemaV2:
         assert (await db.get_idempotency("alice", "k"))["tool_name"] == "t"
         assert await db.get_pending("r1") is not None
         await db.close()
+
+
+class TestPolledExecutionErrors:
+    """A polled result keeps a handler's public fixed message; anything else stays generic."""
+
+    async def _polled_error(self, env) -> dict:
+        first = await _ask(env)
+        assert first["status"] == "pending_approval"
+        rid = first["request_id"]
+        await env.answer("allow")
+        res = (await call(env, "gateway_result", {"request_id": rid, "wait_seconds": 5}))[
+            "structuredContent"
+        ]
+        assert res["status"] == "error" and res["request_id"] == rid
+        return res["error"]
+
+    async def test_public_message_survives_gateway_result(self, env):
+        from agentpass.executor import ExecutionError
+
+        env.service.fail = ExecutionError("fixed public message", public=True)
+        err = await self._polled_error(env)
+        assert err["code"] == "execution_failed"
+        assert err["message"] == "fixed public message"
+
+    async def test_ordinary_execution_error_stays_generic(self, env):
+        from agentpass.executor import ExecutionError
+
+        env.service.fail = ExecutionError("upstream detail token=abc123")
+        err = await self._polled_error(env)
+        assert err == {
+            "code": "execution_failed",
+            "message": "Execution failed",
+            "request_id": err["request_id"],
+        }
+
+    async def test_git_mirror_branch_moved_via_gateway_result(self, env, tmp_path):
+        from agentpass.gitmirror.plugin import MESSAGES, GitMirrorService
+        from tests.test_gitmirror_plugin import FakeHelper, _cfg, _reply
+
+        sock = tmp_path / "h.sock"
+        mirror = GitMirrorService(_cfg(f"unix://{sock}"), [])
+        args = {"owner": "o", "repo": "r", "branch": "main", "sha": "a" * 40}
+
+        async def fetch(tool_name: str, _args: dict) -> dict:
+            return await mirror.execute("gh_mirror_fetch", args)
+
+        env.service.execute = fetch  # the test tool routes to a real GitMirrorService
+        async with FakeHelper(sock, _reply({"ok": False, "error": "branch_moved"})):
+            err = await self._polled_error(env)
+        assert err["code"] == "execution_failed"
+        assert err["message"] == MESSAGES["branch_moved"]
+
+
+class TestUnexpectedFailureAfterApproval:
+    """A non-pipeline exception after approval must still leave a final stored result."""
+
+    async def test_polled_call_reports_internal_error_not_executing(self, env, monkeypatch):
+        async def boom(request):
+            raise RuntimeError("bug with detail token=abc123")
+
+        monkeypatch.setattr(env.pipeline, "_execute", boom)
+        first = await _ask(env)
+        assert first["status"] == "pending_approval"
+        rid = first["request_id"]
+        await env.answer("allow")
+        res = (await call(env, "gateway_result", {"request_id": rid, "wait_seconds": 5}))[
+            "structuredContent"
+        ]
+        assert res["status"] == "error"
+        assert res["error"] == {
+            "code": "internal_error",
+            "message": "Internal error",
+            "request_id": rid,
+        }
+        assert "abc123" not in json.dumps(res)
+        stored = json.loads((await env.db.get_pending(rid))["result"])
+        assert stored["code"] == "internal_error"
+
+    async def test_inline_call_reports_internal_error(self, env, monkeypatch):
+        async def boom(request):
+            raise RuntimeError("bug")
+
+        monkeypatch.setattr(env.pipeline, "_execute", boom)
+        env.mcp._inline_wait = 5
+        task = asyncio.create_task(call(env, "ha_call_service", {"entity_id": "light.a"}))
+        await env.answer("allow")
+        r = await task
+        assert r["isError"] is True
+        assert r["structuredContent"]["error"]["code"] == "internal_error"

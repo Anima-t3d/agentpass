@@ -12,6 +12,7 @@ from typing import Any
 import aiosqlite
 
 from agentpass.models import AuditEntry
+from agentpass.push.models import PushDevice
 
 _IDEMPOTENCY_TABLE = """CREATE TABLE IF NOT EXISTS idempotency_keys (
     agent_id TEXT NOT NULL,
@@ -52,6 +53,18 @@ _REMEMBERED_INDEXES = [
     " COALESCE(args_hash, ''), action) WHERE revoked_at IS NULL",
 ]
 
+_PUSH_DEVICES_TABLE = """CREATE TABLE IF NOT EXISTS push_devices (
+    device_id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    endpoint TEXT UNIQUE NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    one_tap_approve INTEGER NOT NULL DEFAULT 0,
+    credential_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen TEXT NOT NULL
+)"""
+
 _TABLES = [
     """CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +103,7 @@ _TABLES = [
 )""",
     _IDEMPOTENCY_TABLE,
     _REMEMBERED_TABLE,
+    _PUSH_DEVICES_TABLE,
 ]
 
 # Indexes may reference migrated columns, so they run after _migrate().
@@ -106,7 +120,7 @@ _SCHEMA = ";\n".join([*_TABLES, *_INDEXES]) + ";\n"
 
 # Bump when the schema changes and add a step to _MIGRATIONS. A database with
 # user_version 0 is either brand new or from before versioning (v0 baseline).
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 async def _columns(conn: aiosqlite.Connection, table: str) -> set[str]:
@@ -169,6 +183,11 @@ async def _migrate_to_v6(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE pending_requests ADD COLUMN agent_note TEXT")
 
 
+async def _migrate_to_v7(conn: aiosqlite.Connection) -> None:
+    """Push-subscribed devices for the approval PWA."""
+    await conn.execute(_PUSH_DEVICES_TABLE)
+
+
 _MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -176,6 +195,7 @@ _MIGRATIONS = {
     4: _migrate_to_v4,
     5: _migrate_to_v5,
     6: _migrate_to_v6,
+    7: _migrate_to_v7,
 }
 
 
@@ -202,6 +222,24 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
             await _MIGRATIONS[target](conn)
     await conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     await conn.commit()
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _push_device(row: aiosqlite.Row) -> PushDevice:
+    return PushDevice(
+        device_id=row["device_id"],
+        label=row["label"],
+        endpoint=row["endpoint"],
+        p256dh=row["p256dh"],
+        auth=row["auth"],
+        one_tap_approve=bool(row["one_tap_approve"]),
+        credential_id=row["credential_id"],
+        created_at=row["created_at"],
+        last_seen=row["last_seen"],
+    )
 
 
 def _epoch_to_iso(epoch: float) -> str:
@@ -407,6 +445,26 @@ class Database:
             "UPDATE pending_requests "
             "SET state = 'abandoned', preview_json = NULL, agent_note = NULL "
             "WHERE state = 'pending'"
+        )
+        await conn.commit()
+        return rows
+
+    async def interrupt_executing(self, result_json: str) -> list[dict[str, Any]]:
+        """At startup: approved calls a restart cut off get *result_json* as their result.
+
+        A ``resolved`` row without a result was approved and still executing when the
+        previous run stopped; nothing will ever finish it. Each row's ``request_id`` is
+        added to the stored payload. Returns the rows as they were before the update.
+        """
+        conn = self._get_conn()
+        cursor = await conn.execute(
+            "SELECT * FROM pending_requests WHERE state = 'resolved' AND result IS NULL"
+        )
+        rows = [dict(row) for row in await cursor.fetchall()]
+        await conn.execute(
+            "UPDATE pending_requests SET result = json_set(?, '$.request_id', request_id) "
+            "WHERE state = 'resolved' AND result IS NULL",
+            (result_json,),
         )
         await conn.commit()
         return rows
@@ -802,6 +860,91 @@ class Database:
         await conn.execute(
             "UPDATE remembered_rules SET use_count = use_count + 1, last_used_at = ? WHERE id = ?",
             (now_iso, rule_id),
+        )
+        await conn.commit()
+
+    # --- Push devices (Web Push subscriptions of the approval PWA) ---
+
+    async def upsert_push_device(self, d: PushDevice) -> PushDevice:
+        """Insert a device; the same endpoint refreshes keys and last_seen only."""
+        conn = self._get_conn()
+        cursor = await conn.execute(
+            "SELECT device_id FROM push_devices WHERE endpoint = ?", (d.endpoint,)
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            await conn.execute(
+                "UPDATE push_devices SET p256dh = ?, auth = ?, last_seen = ? WHERE device_id = ?",
+                (d.p256dh, d.auth, d.last_seen, existing["device_id"]),
+            )
+            device_id = existing["device_id"]
+        else:
+            await conn.execute(
+                """INSERT INTO push_devices
+                   (device_id, label, endpoint, p256dh, auth, one_tap_approve,
+                    credential_id, created_at, last_seen)
+                   VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+                (
+                    d.device_id,
+                    d.label,
+                    d.endpoint,
+                    d.p256dh,
+                    d.auth,
+                    d.credential_id,
+                    d.created_at,
+                    d.last_seen,
+                ),
+            )
+            device_id = d.device_id
+        await conn.commit()
+        stored = await self.get_push_device(device_id)
+        assert stored is not None
+        return stored
+
+    async def list_push_devices(self) -> list[PushDevice]:
+        conn = self._get_conn()
+        cursor = await conn.execute("SELECT * FROM push_devices ORDER BY created_at, device_id")
+        return [_push_device(r) for r in await cursor.fetchall()]
+
+    async def get_push_device(self, device_id: str) -> PushDevice | None:
+        conn = self._get_conn()
+        cursor = await conn.execute("SELECT * FROM push_devices WHERE device_id = ?", (device_id,))
+        row = await cursor.fetchone()
+        return _push_device(row) if row else None
+
+    async def set_push_device(
+        self,
+        device_id: str,
+        *,
+        label: str | None = None,
+        one_tap_approve: bool | None = None,
+    ) -> bool:
+        """Update label and/or one-tap setting; False if the device does not exist."""
+        conn = self._get_conn()
+        cursor = await conn.execute(
+            "UPDATE push_devices SET label = COALESCE(?, label),"
+            " one_tap_approve = COALESCE(?, one_tap_approve) WHERE device_id = ?",
+            (label, None if one_tap_approve is None else int(one_tap_approve), device_id),
+        )
+        await conn.commit()
+        return cursor.rowcount == 1
+
+    async def delete_push_device(self, device_id: str) -> bool:
+        conn = self._get_conn()
+        cursor = await conn.execute("DELETE FROM push_devices WHERE device_id = ?", (device_id,))
+        await conn.commit()
+        return cursor.rowcount == 1
+
+    async def delete_push_device_by_endpoint(self, endpoint: str) -> bool:
+        conn = self._get_conn()
+        cursor = await conn.execute("DELETE FROM push_devices WHERE endpoint = ?", (endpoint,))
+        await conn.commit()
+        return cursor.rowcount == 1
+
+    async def touch_push_device(self, device_id: str) -> None:
+        conn = self._get_conn()
+        await conn.execute(
+            "UPDATE push_devices SET last_seen = ? WHERE device_id = ?", (_now_iso(), device_id)
         )
         await conn.commit()
 

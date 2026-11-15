@@ -82,6 +82,8 @@ def test_channels_mapping_form(tmp_path, _tools_dir):  # noqa: F811
             LIST_CHANNELS.replace("type: telegram\n    trust", "type: slack\n    trust"),
             "Unsupported channel type",
         ),
+        (LIST_CHANNELS.replace("name: spare", "name: push"), "reserved"),
+        (LIST_CHANNELS.replace("name: spare", "name: passkey"), "reserved"),
         ("channels: []\n", "non-empty"),
         (LIST_CHANNELS.replace("allowed_users: [111, 222]", "allowed_users: []"), "non-empty"),
     ],

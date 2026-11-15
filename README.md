@@ -389,6 +389,10 @@ Approval requests fan out to every channel configured for the rule:
 
 The passkey page is an aiohttp app on loopback. Publish it only on a private network (for example with `tailscale serve`), set `passkey.rp_id` and `passkey.origin` to that name, and enrol a device with `agentpass passkey enroll`. Only public keys are stored on the host. An `ask` rule can require a channel kind (`approval: { require: passkey }`, or `telegram`, default `any_trusted`) so a chat button cannot approve high-risk calls. For such a request the Telegram message says "🔐 Needs passkey approval" and shows an **Approve with passkey** link button to `passkey.origin` plus **Deny** (a trusted deny needs no passkey); there is no Allow button. If the passkey page is not enabled the message says so instead of linking, and `agentpass check-config` reports a passkey rule with no passkey channel as an error. Resolving on the page updates the Telegram message like any other resolution. Use the `channels:` list in `config.yaml` instead of the `messenger:` shorthand to configure several. See [docs/DESIGN.md](docs/DESIGN.md) for the threat model and the approval proof.
 
+### Approval app (PWA) and push notifications
+
+The passkey page is also an installable web app with passkey sign-in, Web Push notifications that name what is being asked (Deny in one tap, Approve opens the app), a History tab over the audit log and a Devices list. Enable it with `passkey.push` and create the VAPID key with `agentpass push init-keys --config config.yaml`. One-tap approve is a per-device opt-in that never applies to `require: passkey` rules. Opening the passkey page from a Telegram or webhook link now needs a passkey sign-in first (once per 12 hours idle, or 7 days), followed by the approval's own passkey touch. See [docs/PWA.md](docs/PWA.md).
+
 ### Approval previews
 
 A tool can declare a `preview:` block so the approver sees what the call will do. The passkey page shows the full preview; Telegram shows a short summary and a link; webhook and command channels never get one. The gateway builds it from the validated args and from read-only `GET` lookups it makes itself, so nothing the agent writes appears in the trusted part. If a preview cannot be built, the page says "Preview unavailable" and shows the raw arguments.
@@ -660,6 +664,7 @@ git clone https://github.com/TorbenWetter/agentpass.git
 cd agentpass
 pip install -e ".[dev]"
 pytest                              # 377 tests
+node --test "tests/js/*.test.mjs"   # service worker logic (Node 24)
 ruff check src/ tests/              # lint
 ruff format src/ tests/             # format
 ```

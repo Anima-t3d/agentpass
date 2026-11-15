@@ -200,6 +200,11 @@ class ApprovalChannel(ABC):
 1. Telegram (refactor of the existing adapter: stateless callbacks, no persistence file).
 2. Passkey approval page.
 3. `notify`-only adapters: webhook and command (display plus link, for chat bridges and notification tools). Whether a plugin ever relays assertions is deferred.
+4. Push channel (Web Push to the approval app, optional).
+
+### 4.5 Push channel
+
+The push channel (`name = "push"`, enabled by `passkey.push.enabled`) sends an encrypted Web Push (RFC 8291/8292) to every device subscribed in the approval app, and a "resolved" push when the request ends. Its trust is `trusted` and its `proof_kinds` is `{"push_action"}`; it never contains `webauthn` or `telegram_callback`. Because `satisfies()` only counts an approval from a channel whose `proof_kinds` matches the rule, a push answer satisfies `any_trusted` and never `require: passkey` or `require: telegram`; a trusted deny always counts. The channel itself answers an Approve from a notification only when the device's server-side one-tap setting is on and the request is `any_trusted`; otherwise the tap opens the page for a normal passkey approval. Action tokens are single use, bound to an approval and a device, and held in memory. A rule that lists `approval.channels` includes the push channel only if it names `push`. See [PWA.md](PWA.md).
 
 ## 5. Configuration and rule format
 
@@ -275,6 +280,25 @@ health: { method: GET, path: /gmail/v1/users/me/profile, expect_status: 200 }
 ```
 
 One service file per upstream host and account. Plugin services (`handler: python`) do not need a `url` or `auth` they do not use.
+
+### 5.5 Non-HTTP handlers that run external programs
+
+Some tools need a program, not an HTTP API. The first one is `gh_mirror_fetch` (`tools/git_mirror.yaml`): it updates a local, read-only git mirror of a GitHub repository to one approved commit, so an agent can `git fetch` from the mirror without holding any GitHub credential. The pattern below is how any such tool should be built.
+
+**The gateway never runs the program.** The gateway user holds every service credential, so a program it starts could be made to read them (in git's case a planted `core.fsmonitor`, hook or `core.sshCommand` runs as the calling user). Instead:
+
+- A separate **helper** runs as its own system user (example: `agentgit`) with its own narrow credential (a fine-grained, read-only GitHub token for the mirrored repositories only) that neither the gateway user nor the agent user can read. systemd hands it the token with `LoadCredential=`; it is never in argv, a URL, a config file, a result or a log line.
+- The gateway service is a `handler: python` plugin (`agentpass.gitmirror.plugin:GitMirrorService`) that only talks to the helper over a **Unix socket**: one JSON line per request, one JSON line back. It does not import `subprocess`. Socket access is by group (example: `agentgit-clients`, containing only the gateway user).
+- The helper is **socket-activated per connection** (`Accept=yes`; examples in `contrib/systemd/agentgit.socket` and `agentgit@.service`): no long-running process, at most `MaxConnections` at once, each bounded by `RuntimeMaxSec` and `MemoryMax`, with `ProtectSystem=strict` and only the mirror root writable. stdin and stdout are the socket; stderr goes to the journal.
+- The helper **validates everything again** (owner, repo, branch, sha, and an allowlist file of `owner/repo` lines) and does not trust the gateway's validation. Before running git it walks every path git reads config from (the mirror repo and its parents, its own home) and refuses unless each component is owned by root or the helper user and not group- or world-writable.
+- git runs with a fixed environment (no system or global config, no prompts, `https` only, hooks disabled, no submodules, no tags, `transfer.fsckObjects`) and a refspec built from validated values only. The result is checked against the approved sha: the ref ends at exactly that sha, or it does not move (`branch_moved`).
+- **Fixed errors only.** The helper answers with one of `invalid_request`, `not_allowed`, `not_configured`, `unsafe_path`, `not_found`, `branch_moved`, `too_large`, `timeout`, `auth_failed`, `busy`, `internal`; the plugin maps each to a fixed message. Program output (git's stderr) goes to the helper's journal with the token scrubbed and never reaches the agent.
+- **Preview lookups come from the helper too.** The service sets `preview_lookups: true`; the plugin's `lookup()` answers the preview paths `/commit` and `/relation` by asking the helper, which reads the GitHub API with its own read-only token. The preview and the fetch see the same repositories, and no token moves between users.
+- **Long calls do not block.** The plugin waits asynchronously, so other tools and approvals keep working, and an approved call that is still running is reported as `executing`, not as an approval timeout. The timeouts are nested: one total budget for all git calls of a fetch in the helper (`AGENTGIT_FETCH_TIMEOUT_S=600` in `agentgit@.service`), then `RuntimeMaxSec=660` on the unit, then 690 s in the plugin (`FETCH_TIMEOUT_S`). To allow longer fetches, raise the environment value and `RuntimeMaxSec` together (a unit drop-in) and keep the plugin deadline above `RuntimeMaxSec`, which for more than 690 s means raising `FETCH_TIMEOUT_S` too.
+
+The agent user reads the mirror through a read-only group (example: `agentgit-readers`); owner directories are `2750` so new repositories inherit the group. git refuses repositories owned by another user, so the agent's git config needs `safe.directory` for each mirror path (per path, not `*`).
+
+Host setup (root, once): create the helper user and the two groups, the mirror root (`root:root 0755`) and one directory per owner, the allowlist (`root:root 0644`) and the token file (`root:root 0600`); install the two units; add the `git_mirror` service (see `config.example.yaml`) and `extends: [git_mirror]` to the agents that may use it. Approval preview: docs/APPROVAL-PREVIEWS.md 4.7.
 
 ## 6. Per-agent identities and audit
 

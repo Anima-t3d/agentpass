@@ -1,0 +1,177 @@
+"""Socket-activated entry point: one JSON line in, one JSON line out (runs as agentgit).
+
+Started per connection by systemd (Accept=yes); stdin/stdout are the connected socket.
+Failures are reported as fixed error codes only; tracebacks go to stderr with the
+token scrubbed.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import select
+import sys
+import time
+import traceback
+from collections.abc import Mapping
+from pathlib import Path
+from typing import BinaryIO
+
+from agentpass.gitmirror.fetch import FetchSettings, fetch, scrub
+from agentpass.gitmirror.lookup import GitHubApi, GitHubHttpApi, lookup_commit, lookup_relation
+from agentpass.gitmirror.validate import (
+    HelperError,
+    check_allowed,
+    load_allowlist,
+    parse_request,
+    repo_path,
+)
+
+MAX_REQUEST = 4096
+READ_TIMEOUT_S = 10.0
+HOME = Path("/var/lib/agentgit")
+ALLOWLIST = Path("/etc/agentgit/repos")
+MIRROR_ROOT = Path("/srv/git-mirror")
+# Total git budget of one fetch. Nested timeouts: this (Environment= in agentgit@.service)
+# < RuntimeMaxSec there (660) < the plugin's FETCH_TIMEOUT_S (690).
+FETCH_TIMEOUT_ENV = "AGENTGIT_FETCH_TIMEOUT_S"
+DEFAULT_FETCH_TIMEOUT_S = 600.0
+
+
+def _read_line(stdin: BinaryIO, timeout_s: float) -> bytes:
+    """Read one request line, bounded by an overall deadline when stdin has a real fd.
+
+    select()+os.read on the descriptor (rather than a socket timeout or SIGALRM) keeps
+    the deadline on the read only, needs no knowledge of the fd being a socket, and
+    avoids a buffered reader blocking again on a partial line.
+    """
+    try:
+        fd = stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = None
+    if fd is None:  # in-memory streams (tests): cannot block
+        line = stdin.readline(MAX_REQUEST + 1)
+    else:
+        deadline = time.monotonic() + timeout_s
+        line = b""
+        while b"\n" not in line and len(line) <= MAX_REQUEST:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                raise HelperError("timeout")
+            chunk = os.read(fd, MAX_REQUEST + 1 - len(line))
+            if not chunk:
+                break
+            line += chunk
+        line = line.split(b"\n", 1)[0] + (b"\n" if b"\n" in line else b"")
+    if line.endswith(b"\n"):
+        line = line[:-1]
+    if len(line) > MAX_REQUEST:
+        raise HelperError("invalid_request")
+    return line
+
+
+def _parse(line: bytes) -> dict:
+    try:
+        raw = json.loads(line.decode("utf-8"))
+    except ValueError:  # includes UnicodeDecodeError and JSONDecodeError
+        raise HelperError("invalid_request") from None
+    if not isinstance(raw, dict):
+        raise HelperError("invalid_request")
+    return raw
+
+
+def _handle(
+    raw: dict,
+    settings: FetchSettings,
+    allowlist_path: Path,
+    mirror_root: Path,
+    api: GitHubApi | None,
+) -> dict:
+    op, kind = raw.get("op"), raw.get("kind")
+    if op == "ping":
+        return {"ok": True}
+    if op not in ("fetch", "lookup") or (op == "lookup" and kind not in ("commit", "relation")):
+        raise HelperError("invalid_request")
+    req = parse_request(raw)
+    check_allowed(req, load_allowlist(allowlist_path))
+    repo = repo_path(mirror_root, req)
+    if op == "fetch":
+        return {"ok": True, "result": fetch(req, repo, settings)}
+    github = api if api is not None else GitHubHttpApi(settings.token)
+    if kind == "commit":
+        return {"ok": True, "result": lookup_commit(req, github)}
+    return {"ok": True, "result": lookup_relation(req, repo, github, settings)}
+
+
+def serve(
+    stdin: BinaryIO,
+    stdout: BinaryIO,
+    settings: FetchSettings,
+    allowlist_path: Path,
+    mirror_root: Path,
+    api: GitHubApi | None = None,
+    read_timeout_s: float = READ_TIMEOUT_S,
+) -> None:
+    try:
+        response = _handle(
+            _parse(_read_line(stdin, read_timeout_s)), settings, allowlist_path, mirror_root, api
+        )
+    except HelperError as e:
+        response = {"ok": False, "error": e.code}
+    except Exception:
+        print(scrub(traceback.format_exc(), settings), file=sys.stderr)
+        response = {"ok": False, "error": "internal"}
+    try:
+        stdout.write((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
+        stdout.flush()
+    except OSError:  # peer already gone; nothing left to tell it
+        pass
+
+
+def load_token() -> str:
+    directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not directory:
+        return ""
+    try:
+        return (Path(directory) / "github-token").read_text().strip()
+    except OSError:
+        return ""
+
+
+def fetch_timeout(environ: Mapping[str, str]) -> float:
+    """The fetch budget from the environment; anything but a finite positive number is
+    the default."""
+    try:
+        value = float(environ.get(FETCH_TIMEOUT_ENV, ""))
+    except ValueError:
+        return DEFAULT_FETCH_TIMEOUT_S
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_FETCH_TIMEOUT_S
+    return value
+
+
+def main() -> None:
+    os.umask(0o027)
+    settings = FetchSettings(
+        token=load_token(),
+        home=HOME,
+        timeout_s=fetch_timeout(os.environ),
+        trusted_uids=frozenset({0, os.getuid()}),
+    )
+    serve(
+        sys.stdin.buffer,
+        sys.stdout.buffer,
+        settings,
+        ALLOWLIST,
+        MIRROR_ROOT,
+    )
+    # serve already wrote the reply or found the peer gone. Exit here: after a broken
+    # pipe the interpreter's own final stdout flush would fail again and exit 120,
+    # leaving a failed unit instance behind.
+    sys.stderr.flush()
+    os._exit(0)
+
+
+if __name__ == "__main__":
+    main()

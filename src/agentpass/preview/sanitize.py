@@ -26,6 +26,26 @@ def escape_unsafe(text: str) -> str:
     return "".join(f"\\u{ord(c):04x}" if _unsafe(c, True) else c for c in text)
 
 
+def clip_escaped(text: str, limit: int, ellipsis: str = "") -> str:
+    """Escape like ``escape_unsafe`` and keep the result within ``limit`` characters.
+
+    Escaping lengthens a character (``\\u202e``), so characters are escaped one by one and
+    dropped from the end once the limit is reached: no escape sequence is ever cut in half.
+    When anything was dropped and ``ellipsis`` is given, it ends the result (inside the limit).
+    """
+    pieces = [escape_unsafe(c) for c in text]
+    if sum(map(len, pieces)) <= limit:
+        return "".join(pieces)
+    out: list[str] = []
+    size = 0
+    for piece in pieces:
+        if size + len(piece) > limit - len(ellipsis):
+            break
+        out.append(piece)
+        size += len(piece)
+    return "".join(out) + ellipsis
+
+
 def strip_unsafe(text: str) -> str:
     """Remove every control and bidi character, newlines included."""
     return "".join(c for c in text if not _unsafe(c, False))

@@ -1,0 +1,55 @@
+# Git mirror tools (service handler: python, agentpass.gitmirror.plugin:GitMirrorService).
+# The gateway never runs git: it sends one JSON line to a separate helper (its own system
+# user and read-only GitHub token) over a Unix socket. The helper fetches one branch into a
+# bare, read-only mirror and leaves refs/heads/<branch> at exactly the approved sha, or fails
+# without moving it. See docs/DESIGN.md 5.5 and docs/APPROVAL-PREVIEWS.md 4.7.
+#
+# Signature: gh_mirror_fetch(owner/repo@branch). sha is not in the signature but is a
+# validated arg, so it is part of the approval proof like every other arg.
+
+tools:
+  gh_mirror_fetch:
+    description: >-
+      Update the local read-only git mirror of a GitHub repository to one commit of one branch.
+      First read the branch tip with gh_get_branch and pass its commit sha; the fetch fails with
+      "branch moved since approval" if the branch no longer points at that sha. Afterwards fetch
+      from mirror_path with plain git. Result: mirror_path, ref, sha, fetched_bytes, duration_ms.
+    signature: "{owner}/{repo}@{branch}"
+    args:
+      owner:
+        type: string
+        required: true
+        max_length: 39
+        validate: "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+        description: "Repository owner (user or organization)"
+      repo:
+        type: string
+        required: true
+        max_length: 100
+        validate: "(?!\\.{1,2}$)[A-Za-z0-9._-]+"
+        description: "Repository name"
+      branch:
+        { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+", description: "Branch name" }
+      sha:
+        { type: string, required: true, validate: "[0-9a-f]{40}|[0-9a-f]{64}", signature: false, description: "Commit sha of the branch tip, from gh_get_branch" }
+    preview:
+      lookups:
+        - { id: commit, path: "/commit", on_error: unavailable, timeout: 5 }
+        - { id: relation, path: "/relation", on_error: unavailable, timeout: 5 }
+      title: "Update mirror of {owner}/{repo} ({branch})"
+      summary: "Update mirror of {owner}/{repo} ({branch}) to {sha}: {commit.headline}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Branch", value: "{branch}" }
+        - { label: "Commit", value: "{sha}" }
+        - { label: "Headline", value: "{commit.headline}" }
+        - { label: "Author", value: "{commit.author}" }
+        - { label: "Date", value: "{commit.date}" }
+        - { label: "Still the branch tip", value: "{commit.is_tip}" }
+        - { label: "Previous", value: "{relation.previous}" }
+        - { label: "History", value: "{relation.summary}" }
+      warnings:
+        - { when: { value: "{relation.state}", equals: "rewritten" }, text: "⚠ History rewritten: commits on this branch will be dropped from the mirror" }
+        - { when: { value: "{relation.state}", equals: "unknown" }, text: "History check unavailable: cannot confirm this is a fast-forward" }
+        - { when: { value: "{commit.is_tip}", equals: "no" }, text: "This commit is no longer the branch tip" }
+    risk: medium

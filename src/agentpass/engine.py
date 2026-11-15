@@ -64,9 +64,10 @@ def check_value(label: str, value: object, arg: ArgDefinition) -> None:
         if arg.items is not None:
             for item in value:
                 check_value(label, item, arg.items)
-    elif t == "object":
-        if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
-            raise ValueError(f"Invalid value for {label}: must be an object")
+    elif t == "object" and (
+        not isinstance(value, dict) or not all(isinstance(k, str) for k in value)
+    ):
+        raise ValueError(f"Invalid value for {label}: must be an object")
 
 
 def validate_args(tool_name: str, args: dict, registry: ToolRegistry | None = None) -> None:

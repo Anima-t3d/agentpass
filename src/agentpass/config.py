@@ -361,6 +361,7 @@ class ServiceConfig:
     tools_file: str = ""
     tools: list[ToolDefinition] = field(default_factory=list)
     errors: list[ErrorMapping] = field(default_factory=list)
+    preview_lookups: bool = False  # python handlers only: the handler can serve preview lookups
 
 
 # --- Permission dataclasses ---
@@ -620,6 +621,8 @@ def _telegram_settings(tg_raw: Any, where: str) -> TelegramConfig:
 CHANNEL_TRUST = ("trusted", "notify")
 CHANNEL_TYPES = ("telegram", "passkey", "webhook", "command")
 NOTIFY_TYPES = ("webhook", "command")
+# Names the gateway gives its own channels; an entry of another type must not take them.
+RESERVED_CHANNEL_NAMES = ("passkey", "push")
 _NOTIFY_KEYS = {
     "webhook": {"name", "type", "trust", "url", "timeout"},
     "command": {"name", "type", "trust", "command", "timeout"},
@@ -690,6 +693,11 @@ def _load_channels(raw: dict[str, Any]) -> list[ChannelConfig]:
         trust = entry.get("trust", "notify" if ctype in NOTIFY_TYPES else "trusted")
         if trust not in CHANNEL_TRUST:
             raise ConfigError(f"{where}.trust must be one of {CHANNEL_TRUST}")
+        if name in RESERVED_CHANNEL_NAMES and ctype != name:
+            raise ConfigError(
+                f"{where}: the name {name!r} is reserved for the {name} channel "
+                f"(type {ctype!r} given)"
+            )
         if any(c.name == name for c in channels):
             raise ConfigError(f"Duplicate channel name: {name}")
         if ctype in NOTIFY_TYPES:
@@ -851,16 +859,26 @@ def load_config(path: str = "config.yaml") -> Config:
             tools_path = str(config_dir / tools_file)
             tools = load_tools_file(tools_path, svc_name)
 
+        handler = svc_data.get("handler", "http")
+        preview_lookups = svc_data.get("preview_lookups", False)
+        if not isinstance(preview_lookups, bool):
+            raise ConfigError(f"services.{svc_name}.preview_lookups must be a boolean")
+        if preview_lookups and handler == "http":
+            raise ConfigError(
+                f"services.{svc_name}.preview_lookups is only meaningful with handler: python"
+            )
+
         services[svc_name] = ServiceConfig(
             name=svc_name,
             url=url,
             auth=auth,
-            handler=svc_data.get("handler", "http"),
+            handler=handler,
             handler_class=svc_data.get("handler_class", ""),
             health=health,
             tools_file=tools_file,
             tools=tools,
             errors=errors,
+            preview_lookups=preview_lookups,
         )
 
     if not services:
