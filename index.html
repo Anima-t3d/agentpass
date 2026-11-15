@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentPass: let your AI agents act, keep the keys</title>
+  <meta name="description" content="A self-hosted gateway for AI agents. It holds your credentials, asks you before anything risky, and shows you exactly what you're approving.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/main.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="container">
+      <a class="brand" href="#hero">
+        <svg aria-hidden="true" viewBox="0 0 32 32"><path d="M16 5.5 7.5 9v6.3c0 5.2 3.6 9.6 8.5 11.2 4.9-1.6 8.5-6 8.5-11.2V9L16 5.5Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="m12 16 3 3 5.5-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        AgentPass
+      </a>
+      <nav class="site-nav" aria-label="Page">
+        <a class="nav-section" href="#how">How it works</a>
+        <a class="nav-section" href="#features">Features</a>
+        <a class="nav-section" href="#security">Security</a>
+        <a href="#quickstart">Get started</a>
+        <a href="https://github.com/Anima-t3d/agentpass">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="hero" aria-labelledby="hero-title">
+      <div class="container">
+        <div>
+          <h1 id="hero-title">Let your AI agents act. Keep the keys.</h1>
+          <p class="subhead">A self-hosted gateway that holds your credentials, asks you before anything risky, and shows you exactly what you're approving.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#quickstart">Get started</a>
+            <a class="btn" href="https://github.com/Anima-t3d/agentpass">View on GitHub</a>
+          </div>
+        </div>
+
+        <figure class="illustration" aria-label="Illustration of an approval request">
+          <div class="approval" data-step="3">
+            <div class="approval-top">
+              <span>Request from <strong>my-agent</strong></span>
+              <span class="status status-pending">Waiting for you</span>
+              <span class="status status-done">Approved</span>
+            </div>
+            <p class="signature">gh_create_issue_comment(acme/api, 42)</p>
+            <div class="preview">
+              <div class="preview-head">Preview, built by the gateway from GitHub</div>
+              <div class="preview-body">
+                <p><strong>Comment on “Webhook retries stop after a 502”</strong></p>
+                <p>Thanks for the report. I reproduced it on <code>main</code>: the retry loop exits on the first 5xx. A fix is in #43.</p>
+              </div>
+            </div>
+            <p class="agent-note">Unverified text from the agent: “Replying to the reporter.”</p>
+            <div class="approval-buttons" aria-hidden="true">
+              <div class="fake-btn">Deny</div>
+              <div class="fake-btn fake-approve">Approve</div>
+            </div>
+            <p class="result-line">Posted to acme/api#42</p>
+          </div>
+          <figcaption class="illustration-label">Illustration</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="is-this-you" aria-labelledby="is-this-you-title">
+      <div class="container">
+        <h2 id="is-this-you-title">Is this you?</h2>
+        <p class="lede">AgentPass is for people who let AI agents use real accounts: GitHub, email, calendars, the smart home. Most of them arrive here from one of four places.</p>
+        <div class="personas">
+          <a class="persona" href="#pain-blocked">
+            <q>I want my agent to keep working when I step away, but it stalls on the first approval prompt.</q>
+            <span>Approve from anywhere</span>
+          </a>
+          <a class="persona" href="#pain-blind">
+            <q>Honestly, I click yes without really reading what it's asking.</q>
+            <span>See what you approve</span>
+          </a>
+          <a class="persona" href="#pain-bitten">
+            <q>I set up careful auto-approve rules. The agent still found a way around them.</q>
+            <span>Rules it can't get around</span>
+          </a>
+          <a class="persona" href="#pain-burned">
+            <q>My agent did something serious I never meant it to, and a secret got out.</q>
+            <span>Nothing left to leak</span>
+          </a>
+        </div>
+      </div>
+    </section>
+    <section class="section pain" id="pain-blocked" aria-labelledby="pain-blocked-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-blocked-title">Approve from wherever you are</h2>
+          <p class="pain-quote">“I want my agent to keep working when I step away, but it stalls on the first approval prompt.”</p>
+          <p class="muted">Most of what an agent does is safe. The trouble is the few calls that aren't, and a prompt on a laptop you just walked away from.</p>
+        </div>
+        <ul class="answer">
+          <li><strong>The request comes to your phone.</strong> Approve or deny with a tap in Telegram, or open the approval page and confirm with your passkey.</li>
+          <li><strong>Safe calls never wait.</strong> Rules per tool and per argument decide what's allowed, what asks you and what's denied. Reading an issue goes through; posting a comment asks.</li>
+          <li><strong>Answer once, not every time.</strong> “Allow always” and “Deny always” remember a decision for the exact call or the tool, within limits the gateway checks.</li>
+          <li class="soon"><span class="soon-badge">Coming soon</span><br><strong>An installable approval app with push notifications.</strong> The notification says what's being asked, with Approve and Deny right on it, and the app keeps your approval history.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section pain" id="pain-blind" aria-labelledby="pain-blind-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-blind-title">See what you're approving</h2>
+          <p class="pain-quote">“Honestly, I click yes without really reading what it's asking.”</p>
+          <p class="muted">A tool name and a blob of JSON don't tell you much. So people stop reading, and an approval prompt turns into a habit.</p>
+        </div>
+        <ul class="answer">
+          <li><strong>Previews of the real thing.</strong> The file change as a diff, the email as it will be sent, the full text of a comment and the issue it goes on.</li>
+          <li><strong>Built by the gateway, not the agent.</strong> Previews come from the checked arguments and read-only lookups the gateway makes itself, so the agent can't dress up what you see.</li>
+          <li><strong>The agent's own words are fenced off.</strong> An agent can explain why it wants something. That text is shown separately and labelled as written by the agent.</li>
+          <li><strong>No preview, no pretending.</strong> If a preview can't be built, the page says so and shows the raw arguments. It never approves on its own.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section pain" id="pain-bitten" aria-labelledby="pain-bitten-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-bitten-title">Rules the agent can't get around</h2>
+          <p class="pain-quote">“I set up careful auto-approve rules. The agent still found a way around them.”</p>
+          <p class="muted">Rules inside the agent are suggestions to a program that can rewrite its own setup, call a different tool or simply log itself in somewhere else.</p>
+        </div>
+        <div>
+          <ul class="answer">
+            <li><strong>The agent never holds the credential.</strong> Tokens for GitHub, Google and Home Assistant stay with the gateway, under a different user. The agent only gets a gateway token.</li>
+            <li><strong>A floor no agent can lower.</strong> Deny and ask rules in the policy floor beat every agent file, shared rule set and remembered “Allow always”.</li>
+            <li><strong>It can't hand itself more access.</strong> Adding collaborators, creating deploy keys, setting Actions secrets and changing branch protection are denied in the shipped GitHub rules.</li>
+          </ul>
+          <p class="story">One agent, blocked on GitHub, tried to log itself in to GitHub with full repo access. Behind AgentPass there's no token on the agent's side to find, and the things that would give it lasting access are denied by default.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section pain" id="pain-burned" aria-labelledby="pain-burned-title">
+      <div class="container">
+        <div>
+          <h2 id="pain-burned-title">Nothing on the agent's side to leak</h2>
+          <p class="pain-quote">“My agent did something serious I never meant it to, and a secret got out.”</p>
+          <p class="muted">When the agent holds the keys, one bad instruction or prompt injection can use them in ways you never intended.</p>
+        </div>
+        <ul class="answer">
+          <li><strong>No secrets to exfiltrate.</strong> The agent can read everything it has and still not find a service token.</li>
+          <li><strong>Risky actions need a person.</strong> Sending mail or changing a file asks you first, the most sensitive calls can require your passkey, and deleting a repository is denied outright.</li>
+          <li><strong>Every call is on the record.</strong> The audit log keeps who asked, what was called, what was decided and by whom, and the agent can't edit it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" id="github" aria-labelledby="github-title">
+      <div class="container">
+        <h2 id="github-title">Example: GitHub with you in the loop</h2>
+        <p class="lede">Your agent triages issues and drafts replies. Nothing reaches GitHub until you've seen it.</p>
+        <ol class="steps">
+          <li class="reveal"><p>The agent drafts a reply to an issue and asks AgentPass to post it.</p></li>
+          <li class="reveal"><p>Your phone shows the full comment and the issue it goes on, in the right repo.</p></li>
+          <li class="reveal"><p>You read it, then approve or deny.</p></li>
+          <li class="reveal"><p>The gateway posts it with its own token. The call is in the audit log.</p></li>
+        </ol>
+        <div class="soon steps-soon">
+          <span class="soon-badge">Coming soon</span>
+          <h3>Secure clone of a private repo</h3>
+          <p>Approve an update for one exact commit, shown before you approve. The gateway fetches it into a read-only mirror the agent can pull from, with no token on the agent.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="how" aria-labelledby="how-title">
+      <div class="container">
+        <h2 id="how-title">How it works</h2>
+        <p class="lede">AgentPass sits between your agent and the services it uses. The agent asks; the gateway decides, asks you when needed, and makes the call.</p>
+        <div class="diagram">
+          <svg class="diagram-h" role="img" aria-label="Diagram: the agent sends a request to AgentPass. AgentPass checks policy, holds the credentials and builds a preview, asks you on your phone or desktop when needed, then calls the service, such as GitHub, Gmail, Google Calendar or Home Assistant." viewBox="0 0 960 200">
+            <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor"/></marker></defs>
+            <g style="color: var(--muted)">
+              <rect class="box" x="10" y="60" width="170" height="80" rx="12"/>
+              <text class="t" x="95" y="96" text-anchor="middle">Your agent</text>
+              <text class="s" x="95" y="118" text-anchor="middle">holds a gateway token</text>
+              <path class="arrow" d="M184 100H262" stroke-width="2" marker-end="url(#ah)"/>
+              <rect class="box box-gate" x="266" y="30" width="260" height="140" rx="14"/>
+              <text class="t" x="396" y="66" text-anchor="middle">AgentPass</text>
+              <text class="s" x="396" y="94" text-anchor="middle">policy: allow, ask, deny</text>
+              <text class="s" x="396" y="116" text-anchor="middle">credentials stay here</text>
+              <text class="s" x="396" y="138" text-anchor="middle">trusted preview, audit log</text>
+              <path class="arrow" d="M396 174V186H690" stroke-width="2" stroke-dasharray="5 5" marker-start="url(#ah)" marker-end="url(#ah)"/>
+              <rect class="box" x="600" y="150" width="180" height="46" rx="10"/>
+              <text class="t" x="690" y="179" text-anchor="middle">You</text>
+              <path class="arrow" d="M530 80H762" stroke-width="2" marker-end="url(#ah)"/>
+              <rect class="box" x="766" y="40" width="184" height="90" rx="12"/>
+              <text class="t" x="858" y="72" text-anchor="middle">The service</text>
+              <text class="s" x="858" y="94" text-anchor="middle">GitHub, Gmail, Calendar,</text>
+              <text class="s" x="858" y="112" text-anchor="middle">Home Assistant</text>
+            </g>
+          </svg>
+          <svg class="diagram-v" role="img" aria-label="Diagram: the agent sends a request to AgentPass, which asks you when needed and then calls the service." viewBox="0 0 300 470">
+            <defs><marker id="av" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor"/></marker></defs>
+            <g style="color: var(--muted)">
+              <rect class="box" x="40" y="5" width="220" height="64" rx="12"/>
+              <text class="t" x="150" y="33" text-anchor="middle">Your agent</text>
+              <text class="s" x="150" y="54" text-anchor="middle">holds a gateway token</text>
+              <path class="arrow" d="M150 72V112" stroke-width="2" marker-end="url(#av)"/>
+              <rect class="box box-gate" x="20" y="116" width="260" height="120" rx="14"/>
+              <text class="t" x="150" y="148" text-anchor="middle">AgentPass</text>
+              <text class="s" x="150" y="174" text-anchor="middle">policy: allow, ask, deny</text>
+              <text class="s" x="150" y="196" text-anchor="middle">credentials stay here</text>
+              <text class="s" x="150" y="218" text-anchor="middle">trusted preview, audit log</text>
+              <path class="arrow" d="M150 240V280" stroke-width="2" stroke-dasharray="5 5" marker-start="url(#av)" marker-end="url(#av)"/>
+              <rect class="box" x="60" y="284" width="180" height="46" rx="10"/>
+              <text class="t" x="150" y="313" text-anchor="middle">You approve</text>
+              <path class="arrow" d="M150 334V374" stroke-width="2" marker-end="url(#av)"/>
+              <rect class="box" x="30" y="378" width="240" height="84" rx="12"/>
+              <text class="t" x="150" y="408" text-anchor="middle">The service</text>
+              <text class="s" x="150" y="430" text-anchor="middle">GitHub, Gmail, Calendar,</text>
+              <text class="s" x="150" y="448" text-anchor="middle">Home Assistant</text>
+            </g>
+          </svg>
+        </div>
+        <ul class="hops">
+          <li><strong>The agent connects</strong> over a local Unix socket, a WebSocket, or MCP, with its own token. Each agent gets its own rules and its own audit trail.</li>
+          <li><strong>The gateway decides.</strong> Deny beats allow, allow beats ask. When a call needs you, it builds the preview and sends the request to every approval channel you've set up.</li>
+          <li><strong>The first valid answer wins.</strong> Then the gateway makes the call with its own credentials and returns only the result to the agent.</li>
+        </ul>
+      </div>
+    </section>
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="container">
+        <h2 id="features-title">What's in the box</h2>
+        <div class="features">
+          <div class="feature"><h3>Policy per tool and per argument</h3><p>Allow, ask or deny by pattern on the call itself, such as <code>gh_put_contents(*, main)</code>.</p></div>
+          <div class="feature"><h3>A policy floor</h3><p>Deny and ask rules no agent file, shared rule set or remembered decision can relax.</p></div>
+          <div class="feature"><h3>Approval channels</h3><p>Telegram buttons and a passkey approval page. A rule can require a passkey for the calls that matter most.</p></div>
+          <div class="feature"><h3>Passkeys</h3><p>WebAuthn on your phone or laptop. Only public keys are stored on the gateway.</p></div>
+          <div class="feature"><h3>Trusted previews</h3><p>Diffs, rendered email, comment text, device state and what a delete removes, built by the gateway.</p></div>
+          <div class="feature"><h3>Remembered decisions</h3><p>“Allow always” and “Deny always”, per exact call or per tool, with limits on what can be remembered.</p></div>
+          <div class="feature"><h3>Audit log and dashboard</h3><p>Every call, decision and resolver, browsable on an admin-only dashboard.</p></div>
+          <div class="feature"><h3>Agents connect their way</h3><p>Unix socket, WebSocket or MCP, a CLI and a Python SDK. One token and one rule set per agent.</p></div>
+          <div class="feature"><h3>Any HTTP API in YAML</h3><p>Tools are declared in YAML: arguments, validation, request and preview. GitHub, Gmail, Calendar, Drive and Home Assistant ship ready to use.</p></div>
+          <div class="feature"><h3>Offline config check</h3><p><code>agentpass check-config</code> catches broken rules, missing previews and unsafe settings before you start.</p></div>
+          <div class="feature soon"><span class="soon-badge">Coming soon</span><h3>Approval app with push notifications</h3><p>An installable PWA: Approve and Deny on the notification, history in your pocket.</p></div>
+          <div class="feature soon"><span class="soon-badge">Coming soon</span><h3>Git mirror</h3><p>Pull private repos into a read-only mirror, one approved commit at a time, with no token on the agent.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="security" aria-labelledby="security-title">
+      <div class="container">
+        <h2 id="security-title">The security model, plainly</h2>
+        <p class="lede">AgentPass assumes your agent can run any command as its own user, including a prompt-injected one. It assumes the agent can't become root or read another user's private files.</p>
+        <div class="columns">
+          <div class="column">
+            <h3><span class="mark mark-yes" aria-hidden="true">✓</span>What it protects against</h3>
+            <ul>
+              <li>The agent reading service tokens, OAuth tokens or the bot token.</li>
+              <li>The agent approving its own request, through any channel it can reach.</li>
+              <li>The agent changing its own permissions or another agent's.</li>
+              <li>The approval showing something other than what will run: previews come from the gateway.</li>
+              <li>Silent actions and a tampered audit log.</li>
+            </ul>
+          </div>
+          <div class="column">
+            <h3><span class="mark mark-no" aria-hidden="true">✕</span>What it doesn't</h3>
+            <ul>
+              <li>Someone with root on the gateway machine.</li>
+              <li>A compromised phone or passkey of the person approving.</li>
+              <li>A service that is itself malicious or compromised.</li>
+              <li>You approving something harmful after reading it.</li>
+              <li>Misuse that stays inside a rule you set to allow.</li>
+            </ul>
+          </div>
+        </div>
+        <p class="muted after">The full threat model is in <a href="https://github.com/Anima-t3d/agentpass/blob/main/docs/DESIGN.md">docs/DESIGN.md</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" id="quickstart" aria-labelledby="quickstart-title">
+      <div class="container">
+        <h2 id="quickstart-title">Get started</h2>
+        <p class="lede">Run the gateway on a Linux machine you trust, such as a home server, a NAS or a VPS, as its own user. Your agent runs as a different user on the same machine.</p>
+        <ol class="qs">
+          <li>
+            <h3>Prepare the machine</h3>
+            <p>As root: a service user for the gateway, a group for the agents allowed to connect, and a directory for the socket. Replace <code>your-agent-user</code> with the user your agent runs as.</p>
+            <pre><code>useradd --system --create-home --home-dir /var/lib/agentpass --shell /usr/sbin/nologin agentpass
+chmod 700 /var/lib/agentpass
+groupadd agentpass-clients
+usermod -aG agentpass-clients agentpass
+usermod -aG agentpass-clients your-agent-user
+install -d -o agentpass -g agentpass -m 0755 /run/agentpass</code></pre>
+            <p><code>/run</code> is emptied on reboot; a systemd unit with <code>RuntimeDirectory=agentpass</code> recreates it. The <a href="https://github.com/Anima-t3d/agentpass/blob/main/docs/DESIGN.md">design doc</a> has the full layout and service hardening.</p>
+          </li>
+          <li>
+            <h3>Install</h3>
+            <p>As the service user, so the agent can't read anything you put here:</p>
+            <pre><code>sudo -u agentpass -H bash
+cd ~ &amp;&amp; git clone https://github.com/Anima-t3d/agentpass &amp;&amp; cd agentpass
+python3 -m venv .venv &amp;&amp; . .venv/bin/activate
+pip install .</code></pre>
+            <p>On the agent's side you only need the client:</p>
+            <pre><code>pip install "git+https://github.com/Anima-t3d/agentpass"</code></pre>
+          </li>
+          <li>
+            <h3>Configure</h3>
+            <p>Put <code>AGENT_TOKEN</code>, <code>GUARDIAN_BOT_TOKEN</code> and <code>GITHUB_TOKEN</code> in <code>.env</code> (<code>chmod 600 .env</code>), then write <code>config.yaml</code>:</p>
+            <pre><code>gateway: {}
+
+listen:
+  socket: /run/agentpass/agent.sock
+  group: agentpass-clients
+
+agent:
+  token: "${AGENT_TOKEN}"
+
+messenger:
+  type: telegram
+  telegram:
+    token: "${GUARDIAN_BOT_TOKEN}"
+    chat_id: -100123456789     # your Telegram chat
+    allowed_users: [123456789] # who may approve
+
+services:
+  github:
+    url: "https://api.github.com"
+    auth: { type: bearer, token: "${GITHUB_TOKEN}" }
+    tools: "tools/github.yaml"
+
+storage:
+  type: sqlite
+  path: "./data/agentpass.db"</code></pre>
+            <p>And <code>permissions.yaml</code>: reads go through, everything else asks, and nothing that deletes or hands out access ever runs.</p>
+            <pre><code>defaults:
+  - pattern: "gh_get_*"
+    action: allow
+  - pattern: "gh_list_*"
+    action: allow
+  - pattern: "*"
+    action: ask
+
+rules:
+  - pattern: "gh_delete_*"
+    action: deny
+  - pattern: "gh_add_collaborator*"
+    action: deny
+  - pattern: "gh_*_deploy_key*"
+    action: deny
+  - pattern: "gh_set_actions_secret*"
+    action: deny
+  - pattern: "gh_update_branch_protection*"
+    action: deny</code></pre>
+          </li>
+          <li>
+            <h3>Check and start</h3>
+            <pre><code>set -a; . ./.env; set +a
+agentpass check-config --config config.yaml
+agentpass serve --config config.yaml --permissions permissions.yaml</code></pre>
+            <p>Then, as the agent's user:</p>
+            <pre><code>agentpass tools --socket /run/agentpass/agent.sock --token "$AGENT_TOKEN"</code></pre>
+          </li>
+        </ol>
+        <p class="after">Next: <a href="https://github.com/Anima-t3d/agentpass#readme">the README</a> covers passkeys, MCP, previews and Google accounts; <a href="https://github.com/Anima-t3d/agentpass/tree/main/docs">the docs</a> go deeper.</p>
+      </div>
+    </section>
+
+    <section class="section" id="fit" aria-labelledby="fit-title">
+      <div class="container">
+        <h2 id="fit-title">Is AgentPass for you?</h2>
+        <div class="columns">
+          <div class="column">
+            <h3><span class="mark mark-yes" aria-hidden="true">✓</span>A good fit if</h3>
+            <ul>
+              <li>Your agent uses real accounts: GitHub, email, calendar, the smart home.</li>
+              <li>You want it to work while you're away, and still decide on the risky calls.</li>
+              <li>You run a machine you trust: a home server, a NAS, a VPS.</li>
+              <li>You're comfortable editing YAML and running a small Python service.</li>
+            </ul>
+          </div>
+          <div class="column">
+            <h3><span class="mark mark-no" aria-hidden="true">✕</span>Probably not if</h3>
+            <ul>
+              <li>Your agent has no real credentials, so there's nothing to protect.</li>
+              <li>It runs in a throwaway sandbox you'd happily wipe.</li>
+              <li>You want zero approvals, ever. AgentPass can allow a lot, but its point is asking about the rest.</li>
+              <li>You have no machine you trust to hold the keys. A hosted option may come later, see below.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="open-source" aria-labelledby="open-source-title">
+      <div class="container oss">
+        <div>
+          <h2 id="open-source-title">Open source, always</h2>
+          <p>AgentPass is MIT licensed and self-hosted. Your credentials and your audit log stay on your machine. No account, no telemetry.</p>
+        </div>
+        <div class="hosted">
+          <h3>Don't run a server?</h3>
+          <p>A hosted version may come later, for people who'd rather not run their own. AgentPass itself stays open source either way.</p>
+          <a class="btn" href="https://github.com/Anima-t3d/agentpass/discussions/1">Tell us you're interested</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="faq" aria-labelledby="faq-title">
+      <div class="container">
+        <h2 id="faq-title">Questions</h2>
+        <div class="faq">
+          <details>
+            <summary>Does it work with my agent?</summary>
+            <div><p>If your agent can run a command, speak MCP, or open a WebSocket, yes. There's a CLI, a Python SDK, an MCP endpoint and a ready-made skill for OpenClaw.</p></div>
+          </details>
+          <details>
+            <summary>Where do my credentials live?</summary>
+            <div><p>On the gateway, readable only by the gateway's own user. The agent gets a gateway token that can ask for tool calls and nothing else.</p></div>
+          </details>
+          <details>
+            <summary>What happens when I'm away or don't answer?</summary>
+            <div><p>The request waits for an answer, 15 minutes by default. If nobody answers, the call isn't made and the agent is told it timed out. Calls your rules allow keep working, and remembered decisions answer repeat requests for you.</p></div>
+          </details>
+          <details>
+            <summary>Can the agent change its own rules?</summary>
+            <div><p>No. Rules live in files the agent can't write, and anything that would hand out access, like adding a collaborator or a deploy key, is denied by the shipped GitHub rules.</p></div>
+          </details>
+          <details>
+            <summary>Which services are supported?</summary>
+            <div><p>GitHub, Gmail, Google Calendar, Google Drive and Home Assistant ship as YAML tool files. Any other HTTP API can be added in YAML, and a Python plugin covers the rest.</p></div>
+          </details>
+          <details>
+            <summary>What does it cost?</summary>
+            <div><p>Nothing. It's MIT licensed and runs on your own hardware.</p></div>
+          </details>
+          <details>
+            <summary>Who makes AgentPass?</summary>
+            <div><p>AgentPass was created by Torben Wetter and is developed in the open on GitHub. Contributions are welcome as pull requests.</p></div>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer" id="footer">
+    <div class="container">
+      <div class="footer-cta">
+        <h2>Let your agent act. Keep the keys.</h2>
+        <p class="muted">Set it up in an afternoon, on a machine you already have.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="#quickstart">Get started</a>
+          <a class="btn" href="https://github.com/Anima-t3d/agentpass">View on GitHub</a>
+        </div>
+      </div>
+      <div class="footer-meta">
+        <p>AgentPass is MIT licensed. Created by Torben Wetter: <a href="https://github.com/TorbenWetter/agentpass">original project</a>.</p>
+        <p><a href="https://github.com/Anima-t3d/agentpass">Source on GitHub</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
