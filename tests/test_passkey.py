@@ -605,6 +605,50 @@ def test_cli_enroll_prints_url(tmp_path, capsys):
     assert (tmp_path / "data" / "passkey-enroll.json").exists()
 
 
+def _push_cfg(tmp_path, extra=""):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        f"storage: {{type: sqlite, path: {tmp_path}/data/agentpass.db}}\n"
+        f"passkey: {{enabled: true, rp_id: {RP_ID}, origin: '{ORIGIN}'{extra}}}\n"
+    )
+    return cfg
+
+
+def test_push_init_keys_creates_0600_and_is_idempotent(tmp_path, capsys):
+    import stat
+
+    from agentpass.__main__ import main
+
+    cfg = _push_cfg(tmp_path)
+    key_path = tmp_path / "data" / "push-vapid.pem"
+    with pytest.raises(SystemExit) as exc:
+        main(["push", "init-keys", "--config", str(cfg)])
+    assert exc.value.code == 0
+    first = capsys.readouterr().out
+    assert first.startswith("VAPID public key: ")
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    pem = key_path.read_bytes()
+
+    with pytest.raises(SystemExit) as exc:
+        main(["push", "init-keys", "--config", str(cfg)])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == first
+    assert key_path.read_bytes() == pem
+
+
+def test_push_init_keys_never_prints_the_private_key(tmp_path, capsys):
+    from agentpass.__main__ import main
+
+    cfg = _push_cfg(tmp_path)
+    for _ in range(2):
+        with pytest.raises(SystemExit):
+            main(["push", "init-keys", "--config", str(cfg)])
+    captured = capsys.readouterr()
+    assert "PRIVATE KEY" not in captured.out + captured.err
+    assert len(captured.out.strip().splitlines()) == 2
+    assert all(line.startswith("VAPID public key: ") for line in captured.out.strip().splitlines())
+
+
 # --- through the real coordinator (no stub sink or answer class) ---
 
 
