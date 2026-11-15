@@ -381,7 +381,9 @@ async function api(path, body) {
 async function session() { csrf = (await api('/api/session')).csrf; }
 
 async function sign(id) {
-  const opts = await api('/api/approvals/' + id + '/challenge', {});
+  return assertWith(await api('/api/approvals/' + id + '/challenge', {}));
+}
+async function assertWith(opts) {
   opts.challenge = b64d(opts.challenge);
   opts.allowCredentials = (opts.allowCredentials || []).map((c) => ({...c, id: b64d(c.id)}));
   const c = await navigator.credentials.get({publicKey: opts});
@@ -708,14 +710,54 @@ function render() {
   document.title = (n ? '(' + n + ') ' : '') + 'agentpass approvals';
 }
 
+/* ---- sign-in: the session opens the list; every Approve still asks for the passkey ---- */
+let signingIn = false;
+function signInPanel(on, message) {
+  const b = document.getElementById('banner');
+  if (!on) { if (b.querySelector('.signin')) b.replaceChildren(); return; }
+  if (b.querySelector('.signin') && !message) return;
+  const btn = h('button', {cls: 'btn btn-primary', type: 'button'}, icon('key'),
+    h('span', {text: 'Sign in with passkey'}));
+  btn.addEventListener('click', signIn);
+  b.replaceChildren(h('div', {cls: 'panel panel-info signin'}, icon('lock'),
+    h('div', null, h('div', {cls: 'panel-title', text: 'Sign in to see approvals'}),
+      h('div', {text: message || 'Use the passkey you enrolled on this device.'})), btn));
+}
+async function signIn() {
+  if (signingIn) return;
+  signingIn = true;
+  try {
+    const credential = await assertWith(await api('/api/login/options', {}));
+    await api('/api/login', {credential});
+    signInPanel(false);
+    await load();
+  } catch (e) {
+    signInPanel(true, e && (e.name === 'NotAllowedError' || e.name === 'AbortError')
+      ? 'Passkey prompt cancelled. Try again.'
+      : e && e.status === 429 ? 'Too many failed attempts. Wait a few minutes.'
+        : 'Sign-in failed (' + ((e && (e.name || e.status)) || 'error') + ').');
+  } finally {
+    signingIn = false;
+  }
+}
+
 async function load() {
   let data;
   try {
     data = await api('/api/pending');
   } catch (e) {
+    if (e && e.status === 401) {  // signed out or session expired: hide what we can't refresh
+      for (const c of cards.values()) c.el.remove();
+      cards.clear();
+      loaded = false;
+      render();
+      signInPanel(true);
+      return;
+    }
     banner(true);
     return;
   }
+  signInPanel(false);
   banner(false);
   enrolled = data.enrolled > 0;
   loaded = true;

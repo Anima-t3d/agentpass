@@ -7,6 +7,7 @@ Approve. Agent bearer tokens are never consulted: the page has no notion of them
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import secrets
 import time
@@ -38,6 +39,7 @@ from agentpass.approval.channel import Answer, AnswerStatus
 from agentpass.config import LOOPBACK_HOSTS, ConfigError
 from agentpass.models import AuditEntry
 from agentpass.passkey import assets
+from agentpass.passkey.session import SESSION_COOKIE, Session, SessionStore
 from agentpass.passkey.store import EnrolmentTokens, PasskeyStore
 from agentpass.passkey.verify import (
     AssertionRejected,
@@ -194,6 +196,7 @@ class ApprovalPage:
         *,
         db: Any = None,
         clock: Callable[[], float] = time.time,
+        sessions: SessionStore | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -205,6 +208,7 @@ class ApprovalPage:
         self._failures: dict[str, deque[float]] = defaultdict(deque)
         self._reg_challenges: dict[str, bytes] = {}  # enrolment token -> challenge
         self._netloc = urlsplit(config.origin).netloc
+        self.sessions = sessions if sessions is not None else SessionStore(clock=clock)
 
     # --- app wiring ---
 
@@ -215,6 +219,9 @@ class ApprovalPage:
         app.router.add_get("/static/app.js", self._asset(assets.APP_JS, "text/javascript"))
         app.router.add_get("/static/app.css", self._asset(assets.APP_CSS, "text/css"))
         app.router.add_get("/api/session", self._session)
+        app.router.add_post("/api/login/options", self._login_options)
+        app.router.add_post("/api/login", self._login)
+        app.router.add_post("/api/logout", self._logout)
         app.router.add_get("/api/pending", self._list_pending)
         app.router.add_post("/api/approvals/{id}/challenge", self._challenge)
         app.router.add_post("/api/approvals/{id}/approve", self._approve)
@@ -323,9 +330,83 @@ class ApprovalPage:
         )
         return response
 
+    # --- sign-in ---
+
+    def require_session(self, request: web.Request) -> Session:
+        """The caller's live page session, or a 401 ``{"error": "sign in"}``.
+
+        A session only opens read views. It never stands in for an approval's assertion.
+        """
+        session = self.sessions.get(request.cookies.get(SESSION_COOKIE, ""))
+        if session is None:
+            raise web.HTTPUnauthorized(
+                text=json.dumps({"error": "sign in"}), content_type="application/json"
+            )
+        return session
+
+    async def _login_options(self, request: web.Request) -> web.Response:
+        if self._throttled(self.source(request)):
+            raise _http(429, "too many failed attempts")
+        creds = self.store.list()
+        if not creds:
+            raise _http(409, "no passkey enrolled")
+        options = generate_authentication_options(
+            rp_id=self.config.rp_id,
+            challenge=self.sessions.new_challenge(),
+            allow_credentials=[PublicKeyCredentialDescriptor(id=_b64d(c.id)) for c in creds],
+            user_verification=UserVerificationRequirement.REQUIRED,
+        )
+        return web.Response(text=options_to_json(options), content_type="application/json")
+
+    async def _login(self, request: web.Request) -> web.Response:
+        if self._throttled(self.source(request)):
+            raise _http(429, "too many failed attempts")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        credential = body.get("credential") if isinstance(body, dict) else None
+        challenge = _client_challenge(credential)
+        # Only a challenge this page issued for sign-in, once and recently, is accepted, so
+        # neither an approval's assertion nor a replayed login assertion opens a session.
+        if challenge is None or not self.sessions.consume_challenge(challenge):
+            raise await self._reject(request, "login", "unknown or expired login challenge")
+        try:
+            verified = verify_approval_assertion(
+                self.store,
+                credential,
+                challenge=challenge,
+                rp_id=self.config.rp_id,
+                origin=self.config.origin,
+            )
+        except AssertionRejected as e:
+            raise await self._reject(request, "login", e.reason) from e
+        token = self.sessions.create(verified.credential_id)
+        logger.info("passkey sign-in id=%s source=%s", verified.credential_id, self.source(request))
+        response = _json({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=self.sessions.absolute,
+            httponly=True,
+            secure=True,
+            samesite="Strict",
+            path="/",
+        )
+        return response
+
+    async def _logout(self, request: web.Request) -> web.Response:
+        self.sessions.drop(request.cookies.get(SESSION_COOKIE, ""))
+        response = _json({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE, "", max_age=0, httponly=True, secure=True, samesite="Strict", path="/"
+        )
+        return response
+
     # --- approvals ---
 
-    async def _list_pending(self, _: web.Request) -> web.Response:
+    async def _list_pending(self, request: web.Request) -> web.Response:
+        self.require_session(request)
         now = self.clock()
         items = [
             {
@@ -492,3 +573,15 @@ async def _body(request: web.Request) -> dict:
 
 def _b64d(value: str) -> bytes:
     return base64url_to_bytes(value)
+
+
+def _client_challenge(credential: Any) -> bytes | None:
+    """The challenge the client says it signed, read from clientDataJSON.
+
+    Untrusted until the signature is verified; only used to look up a login challenge.
+    """
+    try:
+        client = json.loads(_b64d(credential["response"]["clientDataJSON"]))
+        return _b64d(client["challenge"])
+    except Exception:
+        return None

@@ -8,7 +8,7 @@ from agentpass.passkey import assets
 from agentpass.passkey.page import CSP, DISPLAY_LIMIT, display_safe
 from agentpass.passkey.verify import approval_challenge
 from agentpass.preview import LookupNote, Preview, Section, Unavailable
-from tests.test_passkey import HOST, env  # noqa: F401
+from tests.test_passkey import env  # noqa: F401
 
 HOSTILE = "<img src=x onerror=alert(1)><script>alert(2)</script>\"'&"
 BIDI = "evil‮gpj.exe ⁦x⁩ \x00 \x1b[31m"
@@ -34,8 +34,7 @@ def _preview(**kw) -> Preview:
 
 
 async def _pending(env):  # noqa: F811
-    r = await env.client.get("/api/pending", headers={"Host": HOST})
-    return (await r.json())["pending"]
+    return await env.pending()
 
 
 async def _send(env, **kw):  # noqa: F811
@@ -115,8 +114,9 @@ async def test_preview_is_never_part_of_the_challenge(env):  # noqa: F811
 
 
 async def test_every_page_and_asset_carries_the_strict_headers(env):  # noqa: F811
+    await env.sign_in()
     for path in ("/", "/enroll", "/static/app.js", "/static/app.css", "/api/pending"):
-        r = await env.client.get(path, headers={"Host": HOST})
+        r = await env.get(path)
         assert r.status == 200, path
         assert r.headers["Content-Security-Policy"] == CSP
         assert r.headers["X-Frame-Options"] == "DENY"
