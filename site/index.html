@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentPass: let your AI agents act, keep the keys</title>
+  <meta name="description" content="A self-hosted gateway for AI agents. It holds your credentials, asks you before anything risky, and shows you exactly what you're approving.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/main.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="container">
+      <a class="brand" href="#hero">
+        <svg aria-hidden="true" viewBox="0 0 32 32"><path d="M16 5.5 7.5 9v6.3c0 5.2 3.6 9.6 8.5 11.2 4.9-1.6 8.5-6 8.5-11.2V9L16 5.5Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="m12 16 3 3 5.5-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        AgentPass
+      </a>
+      <nav class="site-nav" aria-label="Page">
+        <a class="nav-section" href="#how">How it works</a>
+        <a class="nav-section" href="#features">Features</a>
+        <a class="nav-section" href="#security">Security</a>
+        <a href="#quickstart">Get started</a>
+        <a href="https://github.com/Anima-t3d/agentpass">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="hero" aria-labelledby="hero-title">
+      <div class="container">
+        <div>
+          <h1 id="hero-title">Let your AI agents act. Keep the keys.</h1>
+          <p class="subhead">A self-hosted gateway that holds your credentials, asks you before anything risky, and shows you exactly what you're approving.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#quickstart">Get started</a>
+            <a class="btn" href="https://github.com/Anima-t3d/agentpass">View on GitHub</a>
+          </div>
+        </div>
+
+        <figure class="illustration" aria-label="Illustration of an approval request">
+          <div class="approval" data-step="3">
+            <div class="approval-top">
+              <span>Request from <strong>my-agent</strong></span>
+              <span class="status status-pending">Waiting for you</span>
+              <span class="status status-done">Approved</span>
+            </div>
+            <p class="signature">gh_create_issue_comment(acme/api#42)</p>
+            <div class="preview">
+              <div class="preview-head">Preview, built by the gateway from GitHub</div>
+              <div class="preview-body">
+                <p><strong>Comment on “Webhook retries stop after a 502”</strong></p>
+                <p>Thanks for the report. I reproduced it on <code>main</code>: the retry loop exits on the first 5xx. A fix is in #43.</p>
+              </div>
+            </div>
+            <p class="agent-note">Agent note (written by the agent): “Replying to the reporter.”</p>
+            <div class="approval-buttons" aria-hidden="true">
+              <div class="fake-btn">Deny</div>
+              <div class="fake-btn fake-approve">Approve</div>
+            </div>
+            <p class="result-line">Posted to acme/api#42</p>
+          </div>
+          <figcaption class="illustration-label">Illustration</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="is-this-you" aria-labelledby="is-this-you-title">
+      <div class="container">
+        <h2 id="is-this-you-title">Is this you?</h2>
+        <p class="lede">AgentPass is for people who let AI agents use real accounts: GitHub, email, calendars, the smart home. Most of them arrive here from one of four places.</p>
+        <div class="personas">
+          <a class="persona" href="#pain-blocked">
+            <q>I want my agent to keep working when I step away, but it stalls on the first approval prompt.</q>
+            <span>Approve from anywhere</span>
+          </a>
+          <a class="persona" href="#pain-blind">
+            <q>Honestly, I click yes without really reading what it's asking.</q>
+            <span>See what you approve</span>
+          </a>
+          <a class="persona" href="#pain-bitten">
+            <q>I set up careful auto-approve rules. The agent still found a way around them.</q>
+            <span>Rules it can't get around</span>
+          </a>
+          <a class="persona" href="#pain-burned">
+            <q>My agent did something serious I never meant it to, and a secret got out.</q>
+            <span>Nothing left to leak</span>
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
