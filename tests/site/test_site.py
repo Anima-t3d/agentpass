@@ -430,3 +430,30 @@ def test_footer_credit():
     assert any(href == UPSTREAM_URL for _, href in links)
     assert ("Get started", "#quickstart") in links
     assert "MIT" in footer.text
+
+
+def test_pages_workflow():
+    import yaml
+
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8"))
+    on = wf.get("on", wf.get(True))  # YAML 1.1 reads a bare `on:` key as True
+    assert "site/**" in on["push"]["paths"] and on["push"]["branches"] == ["main"]
+    assert "workflow_dispatch" in on
+    assert wf["permissions"] == {"contents": "read", "pages": "write", "id-token": "write"}
+    assert wf["concurrency"]["group"] == "pages"
+
+    steps = [s for job in wf["jobs"].values() for s in job.get("steps", [])]
+    upload = [s for s in steps if s.get("uses", "").startswith("actions/upload-pages-artifact@")]
+    assert len(upload) == 1 and upload[0]["with"]["path"] == "_site"
+    before = steps[: steps.index(upload[0])]
+    assert any("rm" in s.get("run", "") and "_site/CLAIMS.md" in s.get("run", "") for s in before)
+
+    deploy_jobs = [
+        j
+        for j in wf["jobs"].values()
+        if any(s.get("uses", "").startswith("actions/deploy-pages@") for s in j["steps"])
+    ]
+    assert len(deploy_jobs) == 1 and deploy_jobs[0]["environment"]["name"] == "github-pages"
+    for s in steps:
+        if "uses" in s:
+            assert re.search(r"@(v\d+(\.\d+)*|[0-9a-f]{40})$", s["uses"]), s["uses"]
