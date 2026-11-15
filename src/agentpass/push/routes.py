@@ -24,7 +24,7 @@ from aiohttp import web
 from webauthn import base64url_to_bytes, generate_authentication_options, options_to_json
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
 
-from agentpass.passkey.page import ApprovalPage, _client_challenge
+from agentpass.passkey.page import ApprovalPage, client_challenge
 from agentpass.passkey.session import CHALLENGE_TTL
 from agentpass.passkey.verify import AssertionRejected, verify_approval_assertion
 from agentpass.preview.sanitize import clip_escaped
@@ -229,7 +229,7 @@ class DeviceRoutes:
     # --- one-tap ---
 
     def _check_throttle(self, request: web.Request) -> None:
-        if self.page._throttled(self.page.source(request)):
+        if self.page.throttled(self.page.source(request)):
             raise web.HTTPTooManyRequests(
                 text="too many failed attempts", content_type="text/plain"
             )
@@ -286,9 +286,9 @@ class DeviceRoutes:
         self._check_throttle(request)
         where = f"one-tap:{device.device_id}"
         credential = body.get("credential")
-        challenge = _client_challenge(credential)
+        challenge = client_challenge(credential)
         if challenge is None or not self._consume_challenge(challenge, device.device_id):
-            raise await self.page._reject(request, where, "unknown or expired one-tap challenge")
+            raise await self.page.reject(request, where, "unknown or expired one-tap challenge")
         try:
             verified = verify_approval_assertion(
                 self.page.store,
@@ -298,7 +298,7 @@ class DeviceRoutes:
                 origin=self.page.config.origin,
             )
         except AssertionRejected as e:
-            raise await self.page._reject(request, where, e.reason) from e
+            raise await self.page.reject(request, where, e.reason) from e
         if not await self.db.set_push_device(device.device_id, one_tap_approve=True):
             raise _not_found()
         logger.info(

@@ -292,14 +292,15 @@ class ApprovalPage:
         forwarded = forwarded.split(",")[0].strip()
         return f"{forwarded} (via {peer})" if forwarded else peer
 
-    def _throttled(self, source: str) -> bool:
+    def throttled(self, source: str) -> bool:
+        """Whether `source` hit the failure limit in the window. Shared with the push routes."""
         window = self._failures[source]
         now = self.clock()
         while window and window[0] <= now - FAILURE_WINDOW:
             window.popleft()
         return len(window) >= FAILURE_LIMIT
 
-    async def _reject(
+    async def reject(
         self,
         request: web.Request,
         approval_id: str,
@@ -307,6 +308,10 @@ class ApprovalPage:
         pending: PendingApproval | None = None,
         status: int = 403,
     ) -> web.HTTPException:
+        """Count a failure for throttling, audit it as approval_rejected, return the error.
+
+        Shared with the push routes, so their refusals count towards the same limit.
+        """
         source = self.source(request)
         self._failures[source].append(self.clock())
         logger.warning("approval_rejected id=%s source=%s reason=%s", approval_id, source, reason)
@@ -402,7 +407,7 @@ class ApprovalPage:
         return session
 
     async def _login_options(self, request: web.Request) -> web.Response:
-        if self._throttled(self.source(request)):
+        if self.throttled(self.source(request)):
             raise _http(429, "too many failed attempts")
         creds = self.store.list()
         if not creds:
@@ -416,18 +421,18 @@ class ApprovalPage:
         return web.Response(text=options_to_json(options), content_type="application/json")
 
     async def _login(self, request: web.Request) -> web.Response:
-        if self._throttled(self.source(request)):
+        if self.throttled(self.source(request)):
             raise _http(429, "too many failed attempts")
         try:
             body = await request.json()
         except Exception:
             body = None
         credential = body.get("credential") if isinstance(body, dict) else None
-        challenge = _client_challenge(credential)
+        challenge = client_challenge(credential)
         # Only a challenge this page issued for sign-in, once and recently, is accepted, so
         # neither an approval's assertion nor a replayed login assertion opens a session.
         if challenge is None or not self.sessions.consume_challenge(challenge):
-            raise await self._reject(request, "login", "unknown or expired login challenge")
+            raise await self.reject(request, "login", "unknown or expired login challenge")
         try:
             verified = verify_approval_assertion(
                 self.store,
@@ -437,7 +442,7 @@ class ApprovalPage:
                 origin=self.config.origin,
             )
         except AssertionRejected as e:
-            raise await self._reject(request, "login", e.reason) from e
+            raise await self.reject(request, "login", e.reason) from e
         # A token the request already carried must not outlive the sign-in that replaces it.
         self.sessions.drop(request.cookies.get(SESSION_COOKIE, ""))
         token = self.sessions.create(verified.credential_id)
@@ -523,13 +528,13 @@ class ApprovalPage:
     async def _approve(self, request: web.Request) -> web.Response:
         approval_id = request.match_info["id"]
         source = self.source(request)
-        if self._throttled(source):
+        if self.throttled(source):
             raise _http(429, "too many failed attempts")
         pending = self.pending.get(approval_id)
         if pending is None:
-            raise await self._reject(request, approval_id, "no such pending approval", None, 404)
+            raise await self.reject(request, approval_id, "no such pending approval", None, 404)
         if pending.expires_at <= self.clock():
-            raise await self._reject(request, approval_id, "approval expired", pending, 410)
+            raise await self.reject(request, approval_id, "approval expired", pending, 410)
         try:
             body = await request.json()
         except Exception:
@@ -544,7 +549,7 @@ class ApprovalPage:
                 origin=self.config.origin,
             )
         except AssertionRejected as e:
-            raise await self._reject(request, approval_id, e.reason, pending) from e
+            raise await self.reject(request, approval_id, e.reason, pending) from e
         return await self._deliver(
             pending,
             True,
@@ -589,12 +594,12 @@ class ApprovalPage:
 
     async def _enroll_options(self, request: web.Request) -> web.Response:
         source = self.source(request)
-        if self._throttled(source):
+        if self.throttled(source):
             raise _http(429, "too many failed attempts")
         body = await _body(request)
         token = body.get("token")
         if not isinstance(token, str) or not self.tokens.is_valid(token):
-            raise await self._reject(request, "enroll", "invalid or expired enrolment token")
+            raise await self.reject(request, "enroll", "invalid or expired enrolment token")
         options = generate_registration_options(
             rp_id=self.config.rp_id,
             rp_name="agentpass",
@@ -614,13 +619,13 @@ class ApprovalPage:
 
     async def _enroll_verify(self, request: web.Request) -> web.Response:
         source = self.source(request)
-        if self._throttled(source):
+        if self.throttled(source):
             raise _http(429, "too many failed attempts")
         body = await _body(request)
         token = body.get("token")
         challenge = self._reg_challenges.get(token) if isinstance(token, str) else None
         if challenge is None or not self.tokens.is_valid(token):
-            raise await self._reject(request, "enroll", "invalid or expired enrolment token")
+            raise await self.reject(request, "enroll", "invalid or expired enrolment token")
         label = body.get("label")
         try:
             cred = verify_registration(
@@ -631,9 +636,9 @@ class ApprovalPage:
                 label=label if isinstance(label, str) else "",
             )
         except AssertionRejected as e:
-            raise await self._reject(request, "enroll", e.reason) from e
+            raise await self.reject(request, "enroll", e.reason) from e
         if not self.tokens.consume(token):  # one winner if two submits race
-            raise await self._reject(request, "enroll", "invalid or expired enrolment token")
+            raise await self.reject(request, "enroll", "invalid or expired enrolment token")
         self._reg_challenges.pop(token, None)
         self.store.add(cred)
         logger.info("passkey enrolled id=%s source=%s", cred.id, source)
@@ -664,7 +669,7 @@ def _history_entry(entry: Any) -> dict[str, Any]:
     return row
 
 
-def _client_challenge(credential: Any) -> bytes | None:
+def client_challenge(credential: Any) -> bytes | None:
     """The challenge the client says it signed, read from clientDataJSON.
 
     Untrusted until the signature is verified; only used to look up a login challenge.
