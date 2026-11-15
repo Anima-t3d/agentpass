@@ -39,6 +39,7 @@ from agentpass.preview.model import Preview
 from agentpass.preview.sanitize import escape_unsafe
 from agentpass.push.config import PushConfig
 from agentpass.push.models import PushDevice
+from agentpass.push.routes import DeviceRoutes
 from agentpass.push.tokens import ActionTokens, TokenRejected
 from agentpass.push.webpush import encrypt, load_vapid_key, public_key_b64, vapid_headers
 
@@ -86,12 +87,14 @@ class PushChannel(ApprovalChannel):
         self._pending: dict[str, ApprovalRequest] = {}
         self._tokens = ActionTokens(clock=clock)
         self._tasks: set[asyncio.Task[None]] = set()
+        self.devices = DeviceRoutes(page, db, clock=clock)
         page.add_routes(self._mount)
         page.csrf_exempt.add(ACTION_PATH)
 
     def _mount(self, app: web.Application) -> None:
         app.router.add_post(ACTION_PATH, self._action)
         app.router.add_get(VAPID_PATH, self._vapid)
+        self.devices.mount(app)
 
     # --- lifecycle ---
 
