@@ -51,6 +51,7 @@ from agentpass.passkey.verify import (
     verify_registration,
 )
 from agentpass.preview.sanitize import escape_unsafe
+from agentpass.push.config import PushConfig
 
 logger = logging.getLogger("agentpass.passkey")
 
@@ -73,6 +74,7 @@ class PasskeyConfig:
     rp_id: str = ""
     origin: str = ""
     store_path: str = ""  # default: <storage data dir>/passkeys.json
+    push: PushConfig = field(default_factory=PushConfig)
 
     @property
     def enroll_path(self) -> str:
@@ -90,6 +92,7 @@ class PasskeyConfig:
             rp_id=str(raw.get("rp_id", "")),
             origin=str(raw.get("origin", "")).rstrip("/"),
             store_path=str(raw.get("store_path") or Path(storage_path).parent / "passkeys.json"),
+            push=PushConfig.from_mapping(raw.get("push"), storage_path),
         )
         cfg.validate()
         return cfg
@@ -107,6 +110,9 @@ class PasskeyConfig:
         return cls.from_mapping(raw.get("passkey"), str(storage_path or "./data/agentpass.db"))
 
     def validate(self) -> None:
+        if self.push.enabled and not self.enabled:
+            raise ConfigError("passkey.push.enabled needs the passkey page (passkey.enabled)")
+        self.push.validate()
         if self.host not in LOOPBACK_HOSTS:
             raise ConfigError(f"passkey.host must be a loopback address, got: {self.host!r}")
         parts = urlsplit(self.origin)
@@ -212,6 +218,13 @@ class ApprovalPage:
         self._reg_challenges: dict[str, bytes] = {}  # enrolment token -> challenge
         self._netloc = urlsplit(config.origin).netloc
         self.sessions = sessions if sessions is not None else SessionStore(clock=clock)
+        self._route_hooks: list[Callable[[web.Application], None]] = []
+        # Exact paths whose writes skip the CSRF cookie check (host and Origin still apply).
+        self.csrf_exempt: set[str] = set()
+
+    def add_routes(self, fn: Callable[[web.Application], None]) -> None:
+        """Let another channel mount routes on this app; call before ``build_app``."""
+        self._route_hooks.append(fn)
 
     # --- app wiring ---
 
@@ -235,6 +248,8 @@ class ApprovalPage:
         app.router.add_post("/api/approvals/{id}/deny", self._deny)
         app.router.add_post("/api/enroll/options", self._enroll_options)
         app.router.add_post("/api/enroll/verify", self._enroll_verify)
+        for add in self._route_hooks:
+            add(app)
         return app
 
     @web.middleware
@@ -246,10 +261,11 @@ class ApprovalPage:
             if request.method not in ("GET", "HEAD"):
                 if request.headers.get("Origin") != self.config.origin:
                     raise _http(403, "wrong origin")
-                cookie = request.cookies.get(CSRF_COOKIE, "")
-                header = request.headers.get("X-CSRF", "")
-                if not cookie or not hmac.compare_digest(cookie, header):
-                    raise _http(403, "csrf check failed")
+                if request.path not in self.csrf_exempt:
+                    cookie = request.cookies.get(CSRF_COOKIE, "")
+                    header = request.headers.get("X-CSRF", "")
+                    if not cookie or not hmac.compare_digest(cookie, header):
+                        raise _http(403, "csrf check failed")
             response = await handler(request)
         except web.HTTPException as exc:
             self._harden(exc)

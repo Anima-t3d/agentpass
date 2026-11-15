@@ -36,7 +36,12 @@ def build_channels(config, db=None) -> list[ApprovalChannel]:
         elif entry.type == "passkey":
             from agentpass.passkey.channel import PasskeyChannel
 
-            channels.append(PasskeyChannel(entry.passkey, db=db))
+            passkey = PasskeyChannel(entry.passkey, db=db)
+            channels.append(passkey)
+            if entry.passkey.push.enabled:
+                from agentpass.push.channel import PushChannel
+
+                channels.append(PushChannel(entry.passkey.push, page=passkey.page, db=db))
         elif entry.type in ("webhook", "command"):
             from agentpass.approval.notify_channel import NotifyChannel
 
