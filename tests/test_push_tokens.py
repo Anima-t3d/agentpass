@@ -113,3 +113,18 @@ def test_long_device_id_rejected_at_issue():
 def test_tokens_are_unique():
     tokens = ActionTokens(clock=Clock())
     assert tokens.issue("a1", "d", 2000) != tokens.issue("a1", "d", 2000)
+
+
+def test_ids_with_separator_cannot_be_rebound():
+    tokens = ActionTokens(clock=Clock())
+    raw = _b64d(tokens.issue("a|b", "c", 2000))
+    new_device = b"b|c"
+    forged = raw[:24] + bytes([len(new_device)]) + new_device + raw[-32:]
+    assert _reason(tokens.redeem, _b64e(forged), "a") == "bad signature"
+    assert tokens.redeem(_b64e(raw), "a|b") == "c"
+
+
+def test_oversized_token_is_malformed():
+    tokens = ActionTokens(clock=Clock())
+    raw = _b64d(tokens.issue("a1", "dev1", 2000))
+    assert _reason(tokens.redeem, _b64e(raw + b"x"), "a1") == "malformed"

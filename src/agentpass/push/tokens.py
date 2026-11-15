@@ -6,7 +6,9 @@ HMAC key. Layout (b64url, no padding)::
     nonce(16) | expires(8, big-endian int seconds) | device_len(1)
     | device_id(utf-8) | mac(32)
 
-``mac = HMAC-SHA256(key, f"{approval_id}|{device_id}|" + nonce + expires)``.
+``mac = HMAC-SHA256(key, len2(approval_id) + approval_id + len2(device_id)
++ device_id + nonce + expires)`` with 2-byte big-endian length prefixes
+(utf-8), so no choice of ids can make two bindings collide.
 The key is in memory only, so tokens do not survive a restart.
 """
 
@@ -42,7 +44,11 @@ class ActionTokens:
         self._used: dict[str, set[bytes]] = {}
 
     def _mac(self, approval_id: str, device_id: str, nonce: bytes, expires: bytes) -> bytes:
-        message = f"{approval_id}|{device_id}|".encode() + nonce + expires
+        a = approval_id.encode()
+        d = device_id.encode()
+        if len(a) > 0xFFFF or len(d) > 0xFFFF:
+            raise ValueError("id too long")
+        message = len(a).to_bytes(2, "big") + a + len(d).to_bytes(2, "big") + d + nonce + expires
         return hmac.new(self._key, message, hashlib.sha256).digest()
 
     def issue(self, approval_id: str, device_id: str, expires_at: float) -> str:
@@ -73,7 +79,11 @@ class ActionTokens:
         except UnicodeDecodeError:
             raise TokenRejected("malformed") from None
         mac = raw[head + 1 + device_len :]
-        if not hmac.compare_digest(mac, self._mac(approval_id, device_id, nonce, expires)):
+        try:
+            expected = self._mac(approval_id, device_id, nonce, expires)
+        except ValueError:
+            raise TokenRejected("bad signature") from None
+        if not hmac.compare_digest(mac, expected):
             raise TokenRejected("bad signature")
         if self._clock() >= int.from_bytes(expires, "big"):
             raise TokenRejected("expired")
