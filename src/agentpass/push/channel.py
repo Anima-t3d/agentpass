@@ -36,7 +36,7 @@ from agentpass.approval.channel import (
 from agentpass.passkey.page import ApprovalPage
 from agentpass.passkey.verify import parse_expiry
 from agentpass.preview.model import Preview
-from agentpass.preview.sanitize import escape_unsafe
+from agentpass.preview.sanitize import clip_escaped
 from agentpass.push.config import PushConfig
 from agentpass.push.models import PushDevice
 from agentpass.push.routes import DeviceRoutes
@@ -48,14 +48,14 @@ logger = logging.getLogger("agentpass.push")
 ACTION_PATH = "/api/push/action"
 VAPID_PATH = "/api/push/vapid"
 TEXT_LIMIT = 120
+STOP_GRACE = 2.0  # seconds stop() waits for outstanding pushes before cancelling them
 RESOLVED_TTL = 3600  # a "resolved" push may still close a stale notification later
 
 Transport = Callable[[str, dict[str, str], bytes, float], Awaitable[int]]
 
 
 def _clip(text: str) -> str:
-    text = escape_unsafe(text)
-    return text if len(text) <= TEXT_LIMIT else text[: TEXT_LIMIT - 1] + "…"
+    return clip_escaped(text, TEXT_LIMIT, "…")
 
 
 def _error(status: int, body: dict[str, Any]) -> web.Response:
@@ -115,9 +115,11 @@ class PushChannel(ApprovalChannel):
 
     async def stop(self) -> None:
         tasks = list(self._tasks)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        if tasks:  # let in-flight pushes (a just-finalized "resolved") go out first
+            _, rest = await asyncio.wait(tasks, timeout=STOP_GRACE)
+            for task in rest:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         if self._http is not None:
             await self._http.close()

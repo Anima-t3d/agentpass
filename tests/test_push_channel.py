@@ -522,3 +522,42 @@ def test_build_channels_adds_push_after_passkey(tmp_path):
     assert on[1].page is on[0].page and on[1].proof_kinds == {"push_action"}
     off = build_channels(Cfg(_config(tmp_path, {"enabled": False})))
     assert [c.name for c in off] == ["passkey"]
+
+
+async def test_stop_lets_a_just_finalized_resolved_push_go_out(env):
+    from agentpass.approval import ChannelHandle
+    from agentpass.approval.channel import ApprovalOutcome
+
+    _, sub = await env.device()
+    env.transport.delay[sub.endpoint] = 0.2
+    outcome = ApprovalOutcome("P1", True, ApprovalReason.APPROVED)
+    await env.push.finalize(ChannelHandle("push", {"approval_id": "P1"}), outcome)
+    await env.push.stop()  # right away: the in-flight push is waited for, not cancelled
+    [resolved] = env.transport.bodies(sub)
+    assert resolved["type"] == "resolved" and resolved["approved"] is True
+
+
+async def test_stop_cancels_a_push_that_outlasts_the_grace(env, monkeypatch):
+    from agentpass.approval import ChannelHandle
+    from agentpass.approval.channel import ApprovalOutcome
+    from agentpass.push import channel
+
+    monkeypatch.setattr(channel, "STOP_GRACE", 0.05)
+    _, sub = await env.device()
+    env.transport.delay[sub.endpoint] = 5
+    outcome = ApprovalOutcome("P1", True, ApprovalReason.APPROVED)
+    await env.push.finalize(ChannelHandle("push", {"approval_id": "P1"}), outcome)
+    started = time.monotonic()
+    await env.push.stop()
+    assert time.monotonic() - started < 1 and env.transport.calls == []
+
+
+def test_clip_never_cuts_an_escape_and_stays_within_the_limit():
+    from agentpass.push.channel import TEXT_LIMIT, _clip
+
+    out = _clip("x" * 115 + "\u202e")  # the bidi mark escapes to 6 characters: 121 in all
+    assert out == "x" * 115 + "…"  # the escape is dropped whole, never cut to "\\u20"
+    assert _clip("x" * 118 + "\u202e" * 3) == "x" * 118 + "…"
+    assert len(_clip("\u202e" * 100)) <= TEXT_LIMIT
+    assert _clip("short \u202e") == "short \\u202e"
+    assert _clip("y" * 300) == "y" * (TEXT_LIMIT - 1) + "…"

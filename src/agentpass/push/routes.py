@@ -27,7 +27,7 @@ from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerifica
 from agentpass.passkey.page import ApprovalPage, _client_challenge
 from agentpass.passkey.session import CHALLENGE_TTL
 from agentpass.passkey.verify import AssertionRejected, verify_approval_assertion
-from agentpass.preview.sanitize import escape_unsafe
+from agentpass.preview.sanitize import clip_escaped
 from agentpass.push.models import PushDevice
 
 logger = logging.getLogger("agentpass.push")
@@ -71,20 +71,8 @@ def default_label(user_agent: str) -> str:
 
 
 def _clean_label(value: str) -> str:
-    """Clip to the limit, escape control and bidi characters, and keep the result within it.
-
-    Escaping lengthens a character (``\\u202e``), so characters are escaped one by one and
-    dropped from the end once the limit is reached: no escape sequence is ever cut in half.
-    """
-    out: list[str] = []
-    size = 0
-    for ch in value.strip()[:LABEL_LIMIT]:
-        piece = escape_unsafe(ch)
-        if size + len(piece) > LABEL_LIMIT:
-            break
-        out.append(piece)
-        size += len(piece)
-    return "".join(out).strip()
+    """Clip to the limit, escape control and bidi characters, and keep the result within it."""
+    return clip_escaped(value.strip()[:LABEL_LIMIT], LABEL_LIMIT).strip()
 
 
 def _key_bytes(value: Any, length: int) -> bool:
