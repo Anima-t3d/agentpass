@@ -110,6 +110,8 @@ def test_app_script_has_history_and_devices_views():
     for needle in (
         "/api/history",
         "One-tap enable refused",
+        "e.request_id === 'login'",
+        "'Sign-in refused'",
         "Enable notifications on this device",
         "Notification.requestPermission()",
         "pushManager.subscribe({userVisibleOnly: true, applicationServerKey",
@@ -206,3 +208,10 @@ async def test_login_drops_the_session_token_the_request_carried(env):  # noqa: 
     assert new != old
     assert env.channel.page.sessions.get(old) is None
     assert env.channel.page.sessions.get(new) is not None
+
+
+def test_app_script_has_a_sign_out_control():
+    js, html = assets.APP_JS, assets.INDEX_HTML
+    assert 'id="signout"' in html and "Sign out" in html
+    assert "api('/api/logout', {})" in js
+    assert "getElementById('signout').hidden = on" in js

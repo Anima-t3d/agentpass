@@ -96,6 +96,7 @@ function resultLabel(e) {
 }
 
 function decisionLabel(e) {
+  if (e.request_id === 'login') return {text: 'Sign-in refused', tone: 'refused'};
   if (typeof e.request_id === 'string' && e.request_id.startsWith('one-tap:')) {
     return {text: 'One-tap enable refused', tone: 'refused'};  // not an approval rejection
   }

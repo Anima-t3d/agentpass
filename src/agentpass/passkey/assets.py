@@ -29,7 +29,10 @@ INDEX_HTML = (
     _HEAD % {"title": "agentpass approvals"}
     + """<body class="page-approvals">
 """
-    + _BRAND % {"extra": ""}
+    + _BRAND
+    % {
+        "extra": '<button class="btn btn-quiet signout" id="signout" type="button" hidden>Sign out</button>\n'
+    }
     + """<main class="wrap" id="main">
 <div id="offline" class="offline" role="status" hidden></div>
 <div id="banner" role="alert"></div>
@@ -144,6 +147,7 @@ ul,ol{padding:0;list-style:none}
 
 .topbar{background:var(--surface);border-bottom:1px solid var(--border);
   padding-top:env(safe-area-inset-top)}
+.signout{margin-left:auto;min-height:36px}
 .topbar-in{max-width:40rem;margin:0 auto;padding:var(--s3) var(--s4);display:flex;
   align-items:center;justify-content:space-between;gap:var(--s3)}
 .brand{display:inline-flex;align-items:center;gap:var(--s2);font-weight:700;
@@ -742,6 +746,7 @@ function render() {
 let signingIn = false;
 function signInPanel(on, message) {
   const b = document.getElementById('banner');
+  document.getElementById('signout').hidden = on;
   if (!on) { if (b.querySelector('.signin')) b.replaceChildren(); return; }
   if (b.querySelector('.signin') && !message) return;
   const btn = h('button', {cls: 'btn btn-primary', type: 'button'}, icon('key'),
@@ -751,6 +756,11 @@ function signInPanel(on, message) {
     h('div', null, h('div', {cls: 'panel-title', text: 'Sign in to see approvals'}),
       h('div', {text: message || 'Use the passkey you enrolled on this device.'})), btn));
 }
+async function signOut() {
+  try { await api('/api/logout', {}); } catch (e) { /* offline: the 401 path below still cleans up */ }
+  await load();  // 401 now: clears the cards and shows the sign-in panel
+}
+document.getElementById('signout').addEventListener('click', signOut);
 async function signIn() {
   if (signingIn) return;
   signingIn = true;
