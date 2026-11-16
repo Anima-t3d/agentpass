@@ -4,6 +4,8 @@
 
 Your agent asks, you approve, the gateway passes it through. Connect any HTTP API via YAML -- no Python code required. The agent never sees service credentials.
 
+This project started as a fork of [TorbenWetter/agentpass](https://github.com/TorbenWetter/agentpass).
+
 ---
 
 ## Quick Start
@@ -658,10 +660,10 @@ Mounts: `config.yaml`, `permissions.yaml`, `tools/` (read-only), `data/` (read-w
 ## Development
 
 ```bash
-git clone https://github.com/TorbenWetter/agentpass.git
+git clone https://github.com/Anima-t3d/agentpass.git
 cd agentpass
 pip install -e ".[dev]"
-pytest                              # 377 tests
+pytest
 node --test "tests/js/*.test.mjs"   # service worker logic (Node 24)
 ruff check src/ tests/              # lint
 ruff format src/ tests/             # format
