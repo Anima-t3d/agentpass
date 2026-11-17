@@ -3,6 +3,7 @@
 // loads it as a module (tests/js/history-logic.test.mjs). No DOM here.
 
 const CLIP = 160;
+const RESULT_CLIP = 4000;
 const DAY_MS = 86400000;
 
 // Audit timestamps are epoch seconds. Anything else is parsed as a date string.
@@ -81,4 +82,54 @@ export function resolvedByLabel(v) {
       ? rest.slice(0, -':notification'.length) + ' (notification)' : rest;
   }
   return v;
+}
+
+// A full local date and time, for details and device cards. Empty when there is no date.
+export function whenText(v) {
+  const d = entryDate(v);
+  return d ? d.toLocaleString([], {dateStyle: 'medium', timeStyle: 'medium'}) : '';
+}
+
+// How long an approval waited for an answer.
+export function waitText(seconds) {
+  if (typeof seconds !== 'number' || !isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 1) return 'under a second';
+  if (seconds < 60) return Math.round(seconds) + ' s';
+  if (seconds < 3600) return Math.floor(seconds / 60) + ' min';
+  const hours = Math.floor(seconds / 3600);
+  return hours + ' h ' + Math.floor((seconds - hours * 3600) / 60) + ' min';
+}
+
+function previewText(e) {
+  const status = e.preview_status || '';
+  const title = e.preview_title || '';
+  if (status.startsWith('unavailable')) {
+    const why = status.split(':')[1];
+    return 'Not available' + (why ? ' (' + why + ')' : '');
+  }
+  if (status === 'partial') return title ? title + ' (partial)' : 'Partial';
+  return title;
+}
+
+// What a tapped entry shows beyond the list line. The call arguments are not in /api/history.
+export function detailRows(e) {
+  const rows = [];
+  const add = (key, text, extra = {}) => { if (text) rows.push({key, text, ...extra}); };
+  add('Requested', whenText(e.timestamp));
+  if (e.resolved_at) {
+    const wait = waitText(e.resolved_at - e.timestamp);
+    add('Answered', whenText(e.resolved_at) + (wait ? ', after ' + wait : ''));
+  }
+  add('Policy', e.decision || '');
+  add('Resolution', e.resolution || '');
+  add('Preview', previewText(e));
+  add('Agent note (written by the agent)', e.agent_note || '');
+  const r = e.execution_result;
+  if (r !== null && r !== undefined) {
+    let text = typeof r === 'string' ? r : JSON.stringify(r, null, 2);
+    if (text.length > RESULT_CLIP) text = text.slice(0, RESULT_CLIP) + '\u2026';
+    add('Result', text, {mono: true, block: true});
+  }
+  add('Request ID', e.request_id || '', {mono: true});
+  return rows;
 }

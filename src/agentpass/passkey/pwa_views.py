@@ -26,14 +26,42 @@ VIEWS_CSS = r"""
   color:var(--muted);min-width:0}
 .tools .input{font-family:var(--font);min-height:44px;width:100%;min-width:0}
 .tools .btn{min-height:44px}
+.select{position:relative;display:block}
+.select select{appearance:none;-webkit-appearance:none;padding-right:2.5rem}
+.select::after{content:"";position:absolute;right:1rem;top:50%;width:.5rem;height:.5rem;
+  border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
+  transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.tools input[type="date"]{text-align:left;line-height:1.5}
+.tools input[type="date"]::-webkit-date-and-time-value{text-align:left}
 .hist-day{margin-bottom:var(--s5)}
 .hist-day-title{font-size:var(--fs-sm);font-weight:600;color:var(--muted);
   margin-bottom:var(--s2)}
 .hist-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
   box-shadow:var(--shadow-1)}
-.hist-item{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s3) var(--s4);
-  min-width:0}
+.hist-item{min-width:0}
 .hist-item+.hist-item{border-top:1px solid var(--border)}
+.hist-item summary{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s3) var(--s4);
+  cursor:pointer;list-style:none;border-radius:var(--r-md)}
+.hist-item summary::-webkit-details-marker{display:none}
+.hist-item summary:hover{background:var(--surface-2)}
+.hist-side{display:inline-flex;align-items:center;gap:var(--s3)}
+.hist-chev{width:.5rem;height:.5rem;border-right:2px solid var(--muted);
+  border-bottom:2px solid var(--muted);transform:translateY(-25%) rotate(45deg);
+  transition:transform .15s}
+.hist-item details[open] .hist-chev{transform:translateY(25%) rotate(-135deg)}
+.hist-details{display:grid;grid-template-columns:max-content minmax(0,1fr);
+  gap:var(--s2) var(--s4);margin:0;padding:0 var(--s4) var(--s3);font-size:var(--fs-sm)}
+.hist-details dt{color:var(--muted)}
+.hist-details dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.hist-details .mono{font-family:var(--mono)}
+.hist-details .block{grid-column:1/-1}
+.hist-pre{margin:0;font:400 var(--fs-sm)/1.45 var(--mono);white-space:pre-wrap;
+  overflow-wrap:anywhere;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--r-sm);padding:var(--s2) var(--s3);max-height:20rem;overflow:auto}
+.hist-hint{padding:0 var(--s4) var(--s3);font-size:var(--fs-sm);color:var(--muted)}
+@media (max-width:30rem){.hist-details{grid-template-columns:minmax(0,1fr);gap:var(--s1)}
+  .hist-details dd{margin-bottom:var(--s2)}}
+@media (prefers-reduced-motion:reduce){.hist-chev{transition:none}}
 .hist-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s3)}
 .hist-badge{font-size:var(--fs-sm);font-weight:700;border-radius:var(--r-pill);
   padding:.1rem .7rem;border:1px solid var(--border-strong);background:var(--surface-2);
@@ -126,7 +154,7 @@ function buildHistory() {
   const to = h('input', {cls: 'input', type: 'date', name: 'to'});
   const apply = h('button', {cls: 'btn btn-primary', type: 'submit'}, h('span', {text: 'Filter'}));
   const form = h('div', {cls: 'tools', role: 'search'}, field('Agent', agent), field('Tool', tool),
-    field('Decision', decision), field('From', from), field('To', to), apply);
+    field('Decision', h('span', {cls: 'select'}, decision)), field('From', from), field('To', to), apply);
   const run = () => {
     hv.agent = agent.value.trim(); hv.tool = tool.value.trim();
     hv.decision = decision.value; hv.from = from.value; hv.to = to.value; hv.page = 1; loadHistory();
@@ -173,14 +201,22 @@ function historyItem({entry: e, date}) {
   const meta = h('div', {cls: 'hist-meta'}, e.agent_id ? pair('Agent', e.agent_id) : null,
     by ? pair('Resolved by', by) : null);
   const time = date ? h('time', {cls: 'hist-time', datetime: date.toISOString(),
-    title: date.toLocaleString(),
     text: date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}) : null;
-  return h('li', {cls: 'hist-item'},
-    h('div', {cls: 'hist-top'}, h('span', {cls: 'hist-badge ' + dec.tone, text: dec.text}), time),
+  const summary = h('summary', null,
+    h('div', {cls: 'hist-top'}, h('span', {cls: 'hist-badge ' + dec.tone, text: dec.text}),
+      h('span', {cls: 'hist-side'}, time, h('span', {cls: 'hist-chev', 'aria-hidden': 'true'}))),
     call.name || call.args ? h('div', {cls: 'hist-call'},
       call.name ? h('strong', {text: call.name}) : null, call.args || null) : null,
     meta.childElementCount ? meta : null,
     note ? h('div', {cls: 'hist-note ' + note.tone, text: note.text}) : null);
+  const details = h('dl', {cls: 'hist-details'});
+  for (const r of detailRows(e)) {
+    details.append(h('dt', {cls: r.block ? 'block' : null, text: r.key}),
+      r.block ? h('dd', {cls: 'block'}, h('pre', {cls: 'hist-pre', text: r.text}))
+        : h('dd', {cls: r.mono ? 'mono' : null, text: r.text}));
+  }
+  return h('li', {cls: 'hist-item'}, h('details', null, summary, details,
+    h('p', {cls: 'hist-hint', text: 'Call arguments are only on the admin dashboard.'})));
 }
 
 function drawHistory(box, stale) {
@@ -271,7 +307,7 @@ async function enableNotifications(btn) {
 function deviceCard(d, mine) {
   const name = h('div', {cls: 'device-name', text: d.label});
   const meta = h('div', {cls: 'device-meta', text: (mine ? 'This device. ' : '')
-    + 'Last seen ' + stamp(d.last_seen) + (d.push_host ? ' via ' + d.push_host : '')});
+    + 'Last seen ' + whenText(d.last_seen) + (d.push_host ? ' via ' + d.push_host : '')});
   const card = h('div', {cls: 'card device'});
   const head = h('div', {cls: 'device-head'}, h('div', null, name, meta));
   const actions = h('div', {cls: 'device-actions'});

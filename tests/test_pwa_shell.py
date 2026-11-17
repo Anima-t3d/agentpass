@@ -246,3 +246,98 @@ def test_app_script_has_a_sign_out_control():
     assert 'id="signout"' in html and "Sign out" in html
     assert "api('/api/logout', {})" in js
     assert "getElementById('signout').hidden = on" in js
+
+
+# Browser built-ins the page script may call without defining them.
+JS_GLOBALS = {
+    "Date",
+    "Error",
+    "Map",
+    "Set",
+    "String",
+    "Number",
+    "Object",
+    "Array",
+    "JSON",
+    "Math",
+    "Promise",
+    "URL",
+    "URLSearchParams",
+    "Uint8Array",
+    "atob",
+    "btoa",
+    "decodeURIComponent",
+    "encodeURIComponent",
+    "fetch",
+    "isNaN",
+    "isFinite",
+    "setInterval",
+    "setTimeout",
+    "clearTimeout",
+    "clearInterval",
+    "requestAnimationFrame",
+}
+JS_KEYWORDS = {
+    "if",
+    "for",
+    "while",
+    "switch",
+    "catch",
+    "return",
+    "typeof",
+    "function",
+    "new",
+    "await",
+    "async",
+    "of",
+    "in",
+}
+
+
+def undefined_calls(js: str) -> set[str]:
+    """Bare calls in the script with no function, const/let/var or parameter of that name."""
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    code = re.sub(r"'(?:[^'\\\n]|\\.)*'", "''", code)
+    code = re.sub(r"`(?:[^`\\]|\\.)*`", "``", code)
+    code = re.sub(r"(?<![:\\])//[^\n]*", "", code)
+    calls = set(re.findall(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(", code))
+    defined = set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)", code))
+    defined |= set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", code))
+    params: set[str] = set()
+    for m in re.finditer(
+        r"\(([^()]*)\)\s*=>|\b([A-Za-z_$][\w$]*)\s*=>|function\s*[\w$]*\s*\(([^()]*)\)", code
+    ):
+        for group in m.groups():
+            if group:
+                params |= set(re.findall(r"[A-Za-z_$][\w$]*", group))
+    return calls - defined - params - JS_KEYWORDS - JS_GLOBALS
+
+
+def test_app_script_calls_only_functions_it_defines():
+    """A helper removed in one view and still called in another blanks that tab at runtime."""
+    assert undefined_calls(assets.APP_JS) == set()
+
+
+def test_undefined_call_check_catches_a_missing_helper():
+    js = "function a() { return b(1); }\nconst c = (x) => x(2);\nsetTimeout(a);"
+    assert undefined_calls(js) == {"b"}
+
+
+def test_history_entries_open_details_and_selects_have_their_own_arrow():
+    js = assets.APP_JS
+    for needle in (
+        "h('details'",
+        "h('summary'",
+        "detailRows(e)",
+        "whenText(d.last_seen)",
+        "cls: 'select'",
+    ):
+        assert needle in js, needle
+    css = assets.APP_CSS
+    for needle in (
+        ".select::after",
+        "appearance:none",
+        "::-webkit-date-and-time-value",
+        ".hist-item summary",
+    ):
+        assert needle in css, needle
