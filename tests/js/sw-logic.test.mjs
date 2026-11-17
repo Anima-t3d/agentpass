@@ -314,3 +314,30 @@ test('a tap during an in-flight retry does not post the same approval twice', as
   assert.equal(h.shown.length, 0);  // no "could not send" notice over the success
   assert.equal(h.store.items.size, 0);
 });
+
+// --- every notification carries the app icon and the monochrome status-bar badge ---
+
+const BRAND = {icon: '/icons/icon-192.png', badge: '/icons/badge-96.png'};
+const branded = (n) => n.options.icon === BRAND.icon && n.options.badge === BRAND.badge;
+
+test('notificationFor uses the app icon and the status-bar badge', () => {
+  const {options} = sw.notificationFor(payload());
+  assert.equal(options.icon, BRAND.icon);
+  assert.equal(options.badge, BRAND.badge);
+});
+
+test('the badge and icon are in the shell cache, so offline notices have them', () => {
+  for (const path of Object.values(BRAND)) assert.ok(sw.SHELL.includes(path), path);
+});
+
+test('approval, resolved, unreadable and notice notifications are all branded', async () => {
+  const h = harness({fetchImpl: async () => { throw new TypeError('offline'); }});
+  h.handlers.push(h.evt({data: {json: () => payload()}}));
+  h.handlers.push(h.evt({data: {json: () => ({type: 'resolved', approval_id: 'a1',
+    approved: true, reason: ''})}}));
+  h.handlers.push(h.evt({data: {json: () => { throw new Error('bad'); }}}));
+  click(h, 'deny', payload());  // offline: the "Waiting for Tailscale" notice
+  await Promise.all(h.waits);
+  assert.equal(h.shown.length, 4);
+  for (const n of h.shown) assert.ok(branded(n), JSON.stringify(n));
+});

@@ -42,6 +42,17 @@ async def test_manifest_fields(env):  # noqa: F811
         assert (await r.read()).startswith(PNG)
 
 
+async def test_notification_badge_is_a_small_white_mask(env):  # noqa: F811
+    """Android draws the badge as a status-bar mask: white shape, transparent background."""
+    r = await env.get("/icons/badge-96.png")
+    assert r.status == 200 and r.headers["Content-Type"] == "image/png"
+    png = await r.read()
+    assert png.startswith(PNG)
+    width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    assert (width, height) == (96, 96)
+    assert png[25] in (4, 6)  # colour type with an alpha channel
+
+
 async def test_icons_unknown_name_is_404(env):  # noqa: F811
     assert (await env.get("/icons/nope.png")).status == 404
     assert (await env.get("/icons/..%2Fpage.py")).status == 404
