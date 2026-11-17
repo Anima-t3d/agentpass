@@ -3,31 +3,57 @@
 Appended to the approval page's script and styles (``assets.APP_JS``/``APP_CSS``). Same rules
 as the rest of the page: DOM built with ``h()`` and ``textContent``, never markup parsed from
 data. Everything is fetched through the session-gated API.
+
+The History formatting (dates, labels, grouping) lives in ``static/history-logic.mjs``, which
+node:test loads directly; it is read here with its ``export`` keywords dropped.
 """
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
+HISTORY_LOGIC_PATH = Path(__file__).parent / "static" / "history-logic.mjs"
+HISTORY_LOGIC_JS = re.sub(
+    r"^export ", "", HISTORY_LOGIC_PATH.read_text(encoding="utf-8"), flags=re.MULTILINE
+)
+
 VIEWS_CSS = r"""
 /* History and Devices */
-.tools{display:flex;flex-wrap:wrap;gap:var(--s2);margin-bottom:var(--s4);align-items:flex-end}
+.tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:var(--s3);
+  margin-bottom:var(--s5);align-items:end}
 .tools label{display:flex;flex-direction:column;gap:var(--s1);font-size:var(--fs-sm);
-  color:var(--muted);flex:1 1 9rem}
-.tools .input{font-family:var(--font);min-height:44px}
-.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--r-md);
-  background:var(--surface)}
-.hist{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
-.hist th,.hist td{text-align:left;padding:var(--s2) var(--s3);border-bottom:1px solid var(--border);
-  vertical-align:top}
-.hist th{color:var(--muted);font-weight:600;white-space:nowrap;position:sticky;top:0;
-  background:var(--surface-2)}
-.hist tr:last-child td{border-bottom:0}
-.hist .sig{font-family:var(--mono);overflow-wrap:anywhere;min-width:12rem}
-.hist .when{white-space:nowrap}
-.hist .refused{color:var(--warn-text)}
-.hist .no{color:var(--danger-text)}
-.hist .yes{color:var(--ok-text)}
+  color:var(--muted);min-width:0}
+.tools .input{font-family:var(--font);min-height:44px;width:100%;min-width:0}
+.tools .btn{min-height:44px}
+.hist-day{margin-bottom:var(--s5)}
+.hist-day-title{font-size:var(--fs-sm);font-weight:600;color:var(--muted);
+  margin-bottom:var(--s2)}
+.hist-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+  box-shadow:var(--shadow-1)}
+.hist-item{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s3) var(--s4);
+  min-width:0}
+.hist-item+.hist-item{border-top:1px solid var(--border)}
+.hist-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s3)}
+.hist-badge{font-size:var(--fs-sm);font-weight:700;border-radius:var(--r-pill);
+  padding:.1rem .7rem;border:1px solid var(--border-strong);background:var(--surface-2);
+  color:var(--text)}
+.hist-badge.yes{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok-text)}
+.hist-badge.no{background:var(--danger-bg);border-color:var(--danger-border);
+  color:var(--danger-text)}
+.hist-badge.refused{background:var(--warn-bg);border-color:var(--warn-border);
+  color:var(--warn-text)}
+.hist-time{font-size:var(--fs-sm);color:var(--muted);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.hist-call{font-family:var(--mono);font-size:var(--fs-sm);color:var(--muted);
+  overflow-wrap:anywhere}
+.hist-call strong{color:var(--text)}
+.hist-meta{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);font-size:var(--fs-sm)}
+.hist-key{color:var(--muted);margin-right:var(--s2)}
+.hist-note{font-size:var(--fs-sm);color:var(--muted)}
+.hist-note.no{color:var(--danger-text)}
 .pager{display:flex;gap:var(--s3);align-items:center;justify-content:center;
-  margin-top:var(--s4);color:var(--muted);font-size:var(--fs-sm)}
+  margin-top:var(--s4);color:var(--muted);font-size:var(--fs-sm);text-align:center}
 .stale{color:var(--warn-text);font-size:var(--fs-sm);margin-bottom:var(--s2)}
 .device{display:flex;flex-direction:column;gap:var(--s3);margin-bottom:var(--s3)}
 .device-head{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;
@@ -44,7 +70,10 @@ VIEWS_CSS = r"""
 .views-status{margin-bottom:var(--s3)}
 """
 
-VIEWS_JS = r"""
+VIEWS_JS = (
+    "\n/* ---- History formatting (static/history-logic.mjs) ---- */\n"
+    + HISTORY_LOGIC_JS
+    + r"""
 /* ---- History and Devices tabs, push subscription, offline-queue retry ---- */
 async function send(method, path, body) {
   const r = await fetch(path, {method, credentials: 'same-origin',
@@ -84,48 +113,6 @@ function viewsSignedIn() {  // the 5 s poll saw a live session again
 
 /* ---- History ---- */
 const hv = {page: 1, agent: '', tool: '', decision: '', from: '', to: '', data: null, built: false};
-
-/* Short outcome of the run: execution_result is null when nothing ran, {reason} for a refusal. */
-function resultLabel(e) {
-  const r = e.execution_result;
-  if (r === null || r === undefined) return '\u2014';
-  if (typeof r !== 'object') return String(r).slice(0, 80);
-  if (typeof r.error === 'string') return ('error: ' + r.error).slice(0, 80);
-  if (typeof r.reason === 'string') return r.reason.slice(0, 80);
-  return 'ok';
-}
-
-function decisionLabel(e) {
-  if (e.request_id === 'login') return {text: 'Sign-in refused', tone: 'refused'};
-  if (typeof e.request_id === 'string' && e.request_id.startsWith('one-tap:')) {
-    return {text: 'One-tap enable refused', tone: 'refused'};  // not an approval rejection
-  }
-  const res = e.resolution || '';
-  if (res === 'approval_rejected') return {text: 'Approval rejected', tone: 'refused'};
-  if (res === 'approved') return {text: 'Approved', tone: 'yes'};
-  if (res === 'denied') return {text: 'Denied', tone: 'no'};
-  if (res === 'timed_out') return {text: 'Timed out', tone: 'no'};
-  if (res.startsWith('remembered_')) {
-    return {text: (res === 'remembered_allow' ? 'Allowed' : 'Denied') + ' (remembered rule)',
-      tone: res === 'remembered_allow' ? 'yes' : 'no'};
-  }
-  if (e.decision === 'allow') return {text: 'Allowed', tone: 'yes'};
-  if (e.decision === 'deny') return {text: 'Denied by policy', tone: 'no'};
-  return {text: res ? res.replace(/_/g, ' ') : 'Waiting', tone: ''};
-}
-function resolvedByLabel(v) {
-  if (!v) return '';
-  if (v.startsWith('push:')) {
-    const rest = v.slice(5);
-    return rest.endsWith(':notification')
-      ? rest.slice(0, -':notification'.length) + ' (notification)' : rest;
-  }
-  return v;
-}
-function stamp(iso) {
-  const d = new Date(iso);
-  return isNaN(d) ? String(iso || '') : d.toLocaleString([], {dateStyle: 'short', timeStyle: 'medium'});
-}
 
 function buildHistory() {
   const panel = document.getElementById('panel-history');
@@ -177,6 +164,25 @@ async function loadHistory() {
   drawHistory(box, false);
 }
 
+function historyItem({entry: e, date}) {
+  const dec = decisionLabel(e);
+  const call = splitCall(e);
+  const by = resolvedByLabel(e.resolved_by);
+  const note = resultNote(e);
+  const pair = (key, value) => h('span', null, h('span', {cls: 'hist-key', text: key}), value);
+  const meta = h('div', {cls: 'hist-meta'}, e.agent_id ? pair('Agent', e.agent_id) : null,
+    by ? pair('Resolved by', by) : null);
+  const time = date ? h('time', {cls: 'hist-time', datetime: date.toISOString(),
+    title: date.toLocaleString(),
+    text: date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}) : null;
+  return h('li', {cls: 'hist-item'},
+    h('div', {cls: 'hist-top'}, h('span', {cls: 'hist-badge ' + dec.tone, text: dec.text}), time),
+    call.name || call.args ? h('div', {cls: 'hist-call'},
+      call.name ? h('strong', {text: call.name}) : null, call.args || null) : null,
+    meta.childElementCount ? meta : null,
+    note ? h('div', {cls: 'hist-note ' + note.tone, text: note.text}) : null);
+}
+
 function drawHistory(box, stale) {
   const d = hv.data;
   const nodes = [];
@@ -190,21 +196,10 @@ function drawHistory(box, stale) {
     paintIcons(box);
     return;
   }
-  const head = h('tr', null, ...['Time', 'Agent', 'Tool', 'Signature', 'Decision', 'Result', 'Resolved by']
-    .map((t) => h('th', {scope: 'col', text: t})));
-  const rows = d.entries.map((e) => {
-    const dec = decisionLabel(e);
-    return h('tr', null,
-      h('td', {cls: 'when', text: stamp(e.timestamp)}),
-      h('td', {text: e.agent_id || ''}),
-      h('td', {text: e.tool_name || ''}),
-      h('td', {cls: 'sig', text: e.signature || ''}),
-      h('td', {cls: dec.tone, text: dec.text}),
-      h('td', {text: resultLabel(e)}),
-      h('td', {text: resolvedByLabel(e.resolved_by)}));
-  });
-  nodes.push(h('div', {cls: 'tablewrap'}, h('table', {cls: 'hist'},
-    h('thead', null, head), h('tbody', null, ...rows))));
+  for (const g of groupByDay(d.entries, new Date())) {
+    nodes.push(h('section', {cls: 'hist-day'}, h('h3', {cls: 'hist-day-title', text: g.label}),
+      h('ul', {cls: 'hist-list'}, ...g.items.map(historyItem))));
+  }
   const prev = h('button', {cls: 'btn btn-quiet', type: 'button'}, h('span', {text: 'Newer'}));
   const next = h('button', {cls: 'btn btn-quiet', type: 'button'}, h('span', {text: 'Older'}));
   prev.disabled = d.page <= 1;
@@ -427,3 +422,4 @@ function retryQueued() {
 window.addEventListener('online', () => { retryQueued(); load(); });
 retryQueued();
 """
+)

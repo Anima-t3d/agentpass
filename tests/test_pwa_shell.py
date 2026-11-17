@@ -93,8 +93,29 @@ def test_sw_logic_file_ships_in_the_package():
     root = Path(__file__).parent.parent
     cfg = tomllib.loads((root / "pyproject.toml").read_text())
     patterns = cfg["tool"]["setuptools"]["package-data"]["agentpass"]
-    rel = SW_LOGIC.relative_to(root / "src" / "agentpass").as_posix()
-    assert any(fnmatch.fnmatch(rel, pat) for pat in patterns), (rel, patterns)
+    for path in (SW_LOGIC, HISTORY_LOGIC):
+        rel = path.relative_to(root / "src" / "agentpass").as_posix()
+        assert any(fnmatch.fnmatch(rel, pat) for pat in patterns), (rel, patterns)
+
+
+# The History formatting is tested in tests/js/history-logic.test.mjs; the page ships that file.
+HISTORY_LOGIC = SW_LOGIC.parent / "history-logic.mjs"
+
+
+def test_app_script_is_built_with_the_tested_history_logic():
+    js = assets.APP_JS
+    assert "export " not in js
+    for name in (
+        "entryDate",
+        "dayLabel",
+        "groupByDay",
+        "splitCall",
+        "resultNote",
+        "decisionLabel",
+        "resolvedByLabel",
+    ):
+        assert f"export function {name}(" in HISTORY_LOGIC.read_text(encoding="utf-8"), name
+        assert js.count(f"function {name}(") == 1, name
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -136,7 +157,6 @@ def test_app_script_has_history_and_devices_views():
         "retry-actions",
         "' (notification)'",
         "'Resolved by'",
-        "'Result'",
         "type: 'date'",
         "q.set('from', hv.from)",
         "No history loaded yet.",
