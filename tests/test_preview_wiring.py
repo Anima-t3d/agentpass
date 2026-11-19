@@ -263,7 +263,7 @@ async def test_v4_database_migrates_idempotently(tmp_path):
         )
         await database.close()
     check = sqlite3.connect(path)
-    assert check.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
+    assert check.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 8
     cols = {r[1] for r in check.execute("PRAGMA table_info(audit_log)")}
     assert {"preview_digest", "preview_title", "preview_status", "agent_note"} <= cols
     pending = {r[1] for r in check.execute("PRAGMA table_info(pending_requests)")}

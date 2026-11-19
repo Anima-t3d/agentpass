@@ -33,16 +33,19 @@ from agentpass.preview.model import Unavailable
 
 logger = logging.getLogger(__name__)
 
-# y/n: once. a/d: open the allow/deny-always scope step. ae/at/de/dt: allow/deny always,
-# exact call / whole tool. b: back from the scope step.
-CALLBACK_PATTERN = r"^[0-9a-f-]{36}:(y|n|a|d|ae|at|de|dt|b)$"
+# y/n: once. a/d: open the allow/deny-always scope step. ae/ar/at/de/dr/dt: allow/deny
+# always, exact call / this resource (e.g. repo) / whole tool. b: back from the scope step.
+CALLBACK_PATTERN = r"^[0-9a-f-]{36}:(y|n|a|d|ae|ar|at|de|dr|dt|b)$"
+_SCOPES = ("exact", "resource", "tool")
 
 _ANSWERS = {
     "y": (True, None),
     "n": (False, None),
     "ae": (True, "exact"),
+    "ar": (True, "resource"),
     "at": (True, "tool"),
     "de": (False, "exact"),
+    "dr": (False, "resource"),
     "dt": (False, "tool"),
 }
 
@@ -134,6 +137,14 @@ def scope_text(req: ApprovalRequest, approved: bool) -> str:
     tool_days = offer.allow_tool_days if approved else None
     if offer.permits(approved, "exact"):
         lines.append(f"This exact call ({_expiry(exact_days)}):\n{req.signature}")
+    if offer.permits(approved, "resource"):
+        days = offer.allow_resource_days if approved else None
+        label = offer.resource_label
+        lines.append(
+            f"\nThis {label}, any arguments ({_expiry(days)}):\n{req.tool}({offer.resource}, *)"
+        )
+        if approved:
+            lines.append(f"Every future call of this tool for this {label} runs without asking.")
     if offer.permits(approved, "tool"):
         lines.append(f"\nThis tool, any arguments ({_expiry(tool_days)}):\n{req.tool}(*)")
         if approved:
@@ -220,9 +231,14 @@ class TelegramChannel(ApprovalChannel):
         row = []
         if offer.permits(approved, "exact"):
             row.append(InlineKeyboardButton("This exact call", callback_data=f"{aid}:{verb}e"))
+        if offer.permits(approved, "resource"):
+            label = f"This {offer.resource_label}"
+            row.append(InlineKeyboardButton(label, callback_data=f"{aid}:{verb}r"))
         if offer.permits(approved, "tool"):
             row.append(InlineKeyboardButton("This tool, any args", callback_data=f"{aid}:{verb}t"))
-        return InlineKeyboardMarkup([row, [InlineKeyboardButton("Back", callback_data=f"{aid}:b")]])
+        rows = [row] if len(row) <= 2 else [[b] for b in row]  # three do not fit on one line
+        back = [InlineKeyboardButton("Back", callback_data=f"{aid}:b")]
+        return InlineKeyboardMarkup([*rows, back])
 
     async def send(self, req: ApprovalRequest) -> ChannelHandle:
         text = message_text(req, self._passkey_origin)
@@ -299,9 +315,7 @@ class TelegramChannel(ApprovalChannel):
             text, markup = message_text(req, self._passkey_origin), self._main_markup(req)
         else:
             approved = code == "a"
-            if not (
-                req.remember.permits(approved, "exact") or req.remember.permits(approved, "tool")
-            ):
+            if not any(req.remember.permits(approved, s) for s in _SCOPES):
                 await query.answer("That choice is not available for this request")
                 return
             text, markup = scope_text(req, approved), self._scope_markup(req, approved)

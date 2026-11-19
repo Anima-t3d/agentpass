@@ -12,6 +12,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 ALLOW_EXACT_DAYS = 90
 ALLOW_TOOL_DAYS = 30
+ALLOW_RESOURCE_DAYS = 30
 MAX_SIGNATURE_LEN = 1500  # longer signatures cannot be shown in full in the scope step
 
 _RISK_RANK = {"low": 0, "medium": 1, "high": 2}
@@ -54,7 +56,20 @@ def tool_fingerprint(tool: ToolDefinition) -> str:
     """Hash of everything about a tool that changes what a call does (not its description)."""
     data = dataclasses.asdict(tool)
     data.pop("description", None)
+    if data.get("remember_resource") is None:
+        data.pop("remember_resource", None)  # keeps fingerprints from before the key existed
     return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def resource_of(tool: ToolDefinition | None, args: dict[str, Any]) -> str | None:
+    """The tool's ``remember_resource`` value for a call (e.g. ``owner/repo``), or None."""
+    spec = tool.remember_resource if tool else None
+    if spec is None:
+        return None
+    names = re.findall(r"\{(\w+)\}", spec.template)
+    if any(args.get(n) in (None, "") for n in names):
+        return None
+    return re.sub(r"\{(\w+)\}", lambda m: str(args[m.group(1)]), spec.template)
 
 
 def effective_risk(tool: ToolDefinition | None, approval: ApprovalSpec | None) -> str | None:
@@ -81,14 +96,18 @@ def allow_blocker(
     risk = effective_risk(tool, approval)
     if risk == "high":
         return "high risk"
-    if risk is None and scope == "tool":
+    if risk is None and scope != "exact":
         return "no risk level set"
     return None
 
 
-def pattern_for(scope: str, tool_name: str, signature: str) -> str:
+def pattern_for(scope: str, tool_name: str, signature: str, resource: str | None = None) -> str:
     """Display label of a rule. Never matched against."""
-    return signature if scope == "exact" else f"{tool_name}(*)"
+    if scope == "exact":
+        return signature
+    if scope == "resource":
+        return f"{tool_name}({resource}, *)"
+    return f"{tool_name}(*)"
 
 
 def build_offer(
@@ -102,6 +121,8 @@ def build_offer(
     if tool is None:
         return None
     shown = len(signature) <= MAX_SIGNATURE_LEN
+    resource = resource_of(tool, args)
+    by_resource = shown and resource is not None and len(resource) <= MAX_SIGNATURE_LEN
     return RememberOffer(
         allow_exact=shown and allow_blocker(tool, approval, "exact", floor) is None,
         allow_tool=shown and allow_blocker(tool, approval, "tool", floor) is None,
@@ -111,12 +132,24 @@ def build_offer(
         tool_fingerprint=tool_fingerprint(tool),
         allow_exact_days=ALLOW_EXACT_DAYS,
         allow_tool_days=ALLOW_TOOL_DAYS,
+        allow_resource=by_resource and allow_blocker(tool, approval, "resource", floor) is None,
+        deny_resource=by_resource,
+        resource=resource if by_resource else None,
+        resource_label=tool.remember_resource.label if by_resource else "",
+        allow_resource_days=ALLOW_RESOURCE_DAYS,
     )
 
 
-def _matches(rule: dict[str, Any], signature: str, hash_: str) -> bool:
+_SCOPE_ORDER = {"exact": 0, "resource": 1, "tool": 2}  # the most specific rule is reported
+
+
+def _matches(rule: dict[str, Any], signature: str, hash_: str, resource: str | None) -> bool:
     if rule["scope"] == "tool":
         return True
+    if rule["scope"] == "resource":
+        return resource is not None and rule["signature"] == resource
+    if rule["scope"] != "exact":
+        return False  # unknown scope: fail safe
     if rule["signature"] != signature:
         return False
     return rule["args_hash"] is None or rule["args_hash"] == hash_
@@ -245,18 +278,19 @@ class RememberedService:
         if not rules:
             return None
         hash_ = args_hash(args)
-        hits = [r for r in rules if _matches(r, signature, hash_)]
+        tool = self._registry.get_tool(tool_name) if self._registry else None
+        resource = resource_of(tool, args)
+        hits = [r for r in rules if _matches(r, signature, hash_, resource)]
+        hits.sort(key=lambda r: _SCOPE_ORDER.get(r["scope"], 3))
         denies = [r for r in hits if r["action"] == "deny"]
         if denies:
             return RememberedVerdict(Decision.DENY, denies[0])
         if static is not Decision.ASK:
             return None
-        tool = self._registry.get_tool(tool_name) if self._registry else None
         if tool is None:
             return None
         fingerprint = tool_fingerprint(tool)
-        # an exact rule is reported in preference to a tool-wide one
-        for rule in sorted(hits, key=lambda r: r["scope"] != "exact"):
+        for rule in hits:
             if rule["tool_fingerprint"] != fingerprint:
                 continue
             if allow_blocker(tool, approval, rule["scope"], floor) is None:
@@ -281,18 +315,22 @@ class RememberedService:
         now = time.time()
         expires_at = None
         if approved:
-            days = offer.allow_exact_days if scope == "exact" else offer.allow_tool_days
+            days = {
+                "exact": offer.allow_exact_days,
+                "resource": offer.allow_resource_days,
+            }.get(scope, offer.allow_tool_days)
             expires_at = iso(
                 (datetime.fromtimestamp(now, tz=UTC) + timedelta(days=days)).timestamp()
             )
         action = "allow" if approved else "deny"
-        pattern = pattern_for(scope, req.tool, req.signature)
+        pattern = pattern_for(scope, req.tool, req.signature, offer.resource)
+        stored = {"exact": req.signature, "resource": offer.resource}.get(scope)
         rule_id, _created = await self._db.upsert_remembered_rule(
             {
                 "agent_id": req.agent_id,
                 "scope": scope,
                 "tool_name": req.tool,
-                "signature": req.signature if scope == "exact" else None,
+                "signature": stored,
                 "args_hash": offer.args_hash if scope == "exact" else None,
                 "pattern": pattern,
                 "action": action,

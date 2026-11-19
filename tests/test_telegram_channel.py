@@ -373,7 +373,14 @@ async def test_scope_step_for_an_unknown_or_unoffered_request_is_refused(channel
 
 @pytest.mark.parametrize(
     ("code", "approved", "remember"),
-    [("ae", True, "exact"), ("at", True, "tool"), ("de", False, "exact"), ("dt", False, "tool")],
+    [
+        ("ae", True, "exact"),
+        ("ar", True, "resource"),
+        ("at", True, "tool"),
+        ("de", False, "exact"),
+        ("dr", False, "resource"),
+        ("dt", False, "tool"),
+    ],
 )
 async def test_scope_tap_reports_the_scope_and_nothing_else(channel, code, approved, remember):
     sink = _Sink()
@@ -507,3 +514,62 @@ async def test_resolving_on_the_page_edits_the_telegram_message(tmp_path):
     assert edit["text"].startswith("✅ Approved")
     await coordinator.stop()
     await db.close()
+
+
+REPO_OFFER = RememberOffer(
+    allow_exact=True,
+    allow_tool=True,
+    allow_resource=True,
+    deny_resource=True,
+    resource="octo/hello-world",
+    resource_label="repo",
+    args_hash="h",
+    tool_fingerprint="f",
+)
+
+
+def _repo_req(offer=REPO_OFFER):
+    return _req(
+        remember=offer,
+        tool="gh_update_issue",
+        signature="gh_update_issue(octo/hello-world, 4)",
+    )
+
+
+async def test_scope_step_offers_this_repo_between_exact_and_tool(channel):
+    await channel.start(_Sink())
+    await channel.send(_repo_req())
+    update, query = _query(f"{APPROVAL_ID}:a")
+    query.edit_message_text = AsyncMock()
+    await channel._on_callback(update, None)
+
+    text = query.edit_message_text.call_args.args[0]
+    assert "This repo, any arguments" in text
+    assert "gh_update_issue(octo/hello-world, *)" in text
+    markup = query.edit_message_text.call_args.kwargs["reply_markup"]
+    rows = [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
+    assert rows == [
+        [("This exact call", f"{APPROVAL_ID}:ae")],
+        [("This repo", f"{APPROVAL_ID}:ar")],
+        [("This tool, any args", f"{APPROVAL_ID}:at")],
+        [("Back", f"{APPROVAL_ID}:b")],
+    ]
+    assert all(re.match(CALLBACK_PATTERN, data) for row in rows for _, data in row)
+
+
+async def test_this_repo_alone_is_enough_to_open_the_scope_step(channel):
+    await channel.start(_Sink())
+    only_repo = RememberOffer(
+        deny_exact=False,
+        deny_tool=False,
+        allow_resource=True,
+        resource="o/r",
+        resource_label="repo",
+    )
+    await channel.send(_repo_req(only_repo))
+    assert [t for t, _ in _rows(channel)[1]] == ["Allow always..."]
+    update, query = _query(f"{APPROVAL_ID}:a")
+    query.edit_message_text = AsyncMock()
+    await channel._on_callback(update, None)
+    markup = query.edit_message_text.call_args.kwargs["reply_markup"]
+    assert [b.callback_data for b in markup.inline_keyboard[0]] == [f"{APPROVAL_ID}:ar"]

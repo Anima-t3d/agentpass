@@ -201,10 +201,22 @@ class Config:
 ARG_TYPES = ("string", "text", "integer", "number", "boolean", "enum", "array", "object")
 RISK_LEVELS = ("low", "medium", "high")
 REMEMBER_MODES = ("args", "signature")
+MAX_RESOURCE_LABEL = 20
 RESPONSE_TYPES = ("json", "text", "binary", "none")
 STORE_RESULT_MODES = ("none", "truncated", "full")
 FORBIDDEN_HEADERS = frozenset({"authorization", "host", "cookie"})
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+
+
+@dataclass(frozen=True)
+class RememberResource:
+    """What "Allow always: this <label>" covers: the value of *template* for a call.
+
+    *template* names required signature args only, e.g. ``"{owner}/{repo}"``.
+    """
+
+    label: str
+    template: str
 
 
 @dataclass
@@ -328,6 +340,7 @@ class ToolDefinition:
     risk: str | None = None  # low | medium | high; display hint and MCP annotations
     remember: str = "args"  # what "Allow always, exact" matches: args (all) | signature
     preview: PreviewSpec | None = None
+    remember_resource: RememberResource | None = None  # adds "Allow always: this <label>"
 
 
 @dataclass
@@ -1433,6 +1446,7 @@ def _parse_tool(tool_name: str, data: dict, service_name: str) -> ToolDefinition
     remember = data.get("remember", "args")
     if remember not in REMEMBER_MODES:
         raise ConfigError(f"{where}: remember must be one of {REMEMBER_MODES}")
+    remember_resource = _parse_remember_resource(where, data.get("remember_resource"), args)
     preview = _parse_preview(where, data["preview"], args) if data.get("preview") else None
 
     return ToolDefinition(
@@ -1448,4 +1462,31 @@ def _parse_tool(tool_name: str, data: dict, service_name: str) -> ToolDefinition
         risk=risk,
         remember=remember,
         preview=preview,
+        remember_resource=remember_resource,
     )
+
+
+def _parse_remember_resource(
+    where: str, raw: Any, args: dict[str, ArgDefinition]
+) -> RememberResource | None:
+    """``remember_resource: {label, template}``; the template names required signature args."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"label", "template"}:
+        raise ConfigError(f"{where}: remember_resource needs exactly label and template")
+    label, template = raw["label"], raw["template"]
+    if not isinstance(label, str) or not 0 < len(label) <= MAX_RESOURCE_LABEL:
+        raise ConfigError(
+            f"{where}: remember_resource.label must be 1 to {MAX_RESOURCE_LABEL} characters"
+        )
+    names = re.findall(r"\{(\w+)\}", template) if isinstance(template, str) else []
+    if not names:
+        raise ConfigError(f"{where}: remember_resource.template must name at least one arg")
+    for name in names:
+        arg = args.get(name)
+        if arg is None or not arg.required or not arg.signature:
+            raise ConfigError(
+                f"{where}: remember_resource.template may only name required signature args"
+                f" ({name!r} is not one)"
+            )
+    return RememberResource(label=label, template=template)

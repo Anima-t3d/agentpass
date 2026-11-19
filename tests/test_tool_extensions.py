@@ -756,6 +756,7 @@ GH_CASES = {
     ],
     "ask": [
         ("gh_create_issue", {**REPO, "title": "t"}),
+        ("gh_create_repo", {"name": "new-repo", "private": True}),
         ("gh_create_issue_comment", {**REPO, "number": 1, "body": "hi (there), *x*"}),
         ("gh_create_pull", {**REPO, "title": "t", "head": "feat/x", "base": "main"}),
         ("gh_dispatch_workflow", {**REPO, "workflow": "ci.yml", "ref": "main"}),
@@ -866,3 +867,23 @@ async def test_github_branch_protection_path_traversal_rejected(gh_registry):
         method="put",
     )
     assert fn.call_args[0][0].endswith("/branches/release/1.x/protection")
+
+
+def test_gh_create_repo_posts_to_user_repos(gh_registry):
+    from agentpass.services.http import GenericHTTPService
+
+    reg = gh_registry[0]
+    tool = reg.get_tool("gh_create_repo")
+    assert (tool.request.method, tool.request.path, tool.risk) == ("POST", "/user/repos", "high")
+    assert tool.remember_resource is None
+    args = {"name": "new-repo", "private": False, "description": "d (x), *y*"}
+    assert build_signature("gh_create_repo", args, reg) == "gh_create_repo(new-repo)"
+    assert GenericHTTPService._build_body(tool, {**args, "auto_init": False}) == {
+        "name": "new-repo",
+        "private": False,
+        "description": "d (x), *y*",
+        "auto_init": False,
+    }
+    for bad in ({"name": "x"}, {"name": "..", "private": True}, {"name": "a/b", "private": True}):
+        with pytest.raises(ValueError):
+            validate_args("gh_create_repo", bad, reg)

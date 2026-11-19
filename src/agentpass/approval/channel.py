@@ -58,19 +58,25 @@ class RememberOffer:
     tool_fingerprint: str = ""
     allow_exact_days: int = 90
     allow_tool_days: int = 30
+    # "this <resource_label>" (e.g. this repo): the tool, any args, for one resource value
+    allow_resource: bool = False
+    deny_resource: bool = False
+    resource: str | None = None
+    resource_label: str = ""
+    allow_resource_days: int = 30
 
     def permits(self, approved: bool, scope: str) -> bool:
-        if scope not in ("exact", "tool"):
+        if scope not in ("exact", "resource", "tool"):
             return False
         return getattr(self, f"{'allow' if approved else 'deny'}_{scope}")
 
     @property
     def any_allow(self) -> bool:
-        return self.allow_exact or self.allow_tool
+        return self.allow_exact or self.allow_resource or self.allow_tool
 
     @property
     def any_deny(self) -> bool:
-        return self.deny_exact or self.deny_tool
+        return self.deny_exact or self.deny_resource or self.deny_tool
 
 
 @dataclass
@@ -111,7 +117,9 @@ class Answer:
     channel: str
     approver_id: str
     proof: Any = None  # channel-verified evidence (e.g. a WebAuthn assertion record)
-    remember: str | None = None  # "exact" | "tool": store a remembered rule (Allow/Deny always)
+    remember: str | None = (
+        None  # "exact" | "resource" | "tool": store a remembered rule (Allow/Deny always)
+    )
 
 
 @dataclass

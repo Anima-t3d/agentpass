@@ -21,9 +21,9 @@ New table, created by migration **v4** (`SCHEMA_VERSION = 4`; also added to `_TA
 CREATE TABLE IF NOT EXISTS remembered_rules (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id          TEXT NOT NULL,
-    scope             TEXT NOT NULL CHECK (scope IN ('exact', 'tool')),
+    scope             TEXT NOT NULL CHECK (scope IN ('exact', 'resource', 'tool')),  -- 'resource': migration v8
     tool_name         TEXT NOT NULL,
-    signature         TEXT,            -- exact scope: the signature string; NULL for tool scope
+    signature         TEXT,            -- exact: the signature string; resource: the resource value (e.g. owner/repo); NULL for tool scope
     args_hash         TEXT,            -- exact scope: sha256 of canonical JSON of the agent-supplied args; NULL for tool scope
     pattern           TEXT NOT NULL,   -- display only: 'tool(signature)' or 'tool(*)'. Never matched against.
     action            TEXT NOT NULL CHECK (action IN ('allow', 'deny')),
@@ -133,6 +133,7 @@ Telegram limits callback data to 64 bytes. Format: `<approval_id (uuid, 36)>:<co
 | `a` / `d` | open the allow-always / deny-always scope step | no (edit message only) |
 | `ae` / `at` | allow always, exact / tool | yes + rule |
 | `de` / `dt` | deny always, exact / tool | yes + rule |
+| `ar` / `dr` | allow / deny always, this resource (e.g. this repo) | yes + rule |
 | `b` | back to step 1 | no |
 
 Max length 39. `CALLBACK_PATTERN` becomes `^[0-9a-f-]{36}:(y|n|a|d|ae|at|de|dt|b)$`. The scope is therefore part of the callback data, but **the pattern, tool, agent and expiry are not**: the gateway rebuilds them from the pending request it already holds. A forged or replayed button can at most pick a scope for a request that is pending right now.
@@ -217,6 +218,8 @@ Assumption: the attacker controls an agent (token, prompts, tool call content) o
 3. No `critical` level; `high` is enough. Unknown risk values count as high.
 4. Medium risk may get tool scope. The shipped Gmail, Calendar and Home Assistant tools now carry a `risk` (see the README).
 5. Tool-definition fingerprint: `remembered_rules.tool_fingerprint` is a sha256 of the tool definition without its description (`remembered.tool_fingerprint`). An **allow** whose fingerprint no longer matches is ignored and shown as "inactive: tool changed" (dashboard, `check-config`). A **deny** is kept in force whatever changed, since ignoring it would be the unsafe direction.
+
+6. Resource scope ("this repo"). A tool with `remember_resource: {label, template}` also offers "This <label>": the tool, any arguments, for one value of the template (`{owner}/{repo}` for the GitHub tools). The rule stores scope `resource` and the rendered value in `signature`; matching renders the template from the call's args and compares strings, never as a glob. Eligibility and expiry are those of the tool scope (no high or unset risk, no passkey rule, no floor ask; allow 30 days, deny none). Precedence when several match: any deny wins, then exact, resource, tool. Migration v8 rebuilds `remembered_rules` to widen the `scope` CHECK, keeping ids and rows. A tool without `remember_resource` keeps its old fingerprint.
 
 Implementation notes:
 

@@ -162,7 +162,7 @@ Agent Device (untrusted)            Gateway (trusted)
 | **Transport security**   | Unix socket by default (0660, group `agentpass-clients`, plaintext OK). TCP needs TLS or `--insecure`; wildcard binds refused. |
 | **Input validation**     | Glob metacharacters, control chars, and invalid identifiers are rejected.          |
 | **Rate limiting**        | Max 10 pending approvals, max 60 requests/minute (configurable).                   |
-| **Remembered decisions** | "Allow always" / "Deny always" in Telegram store a revocable rule in the database. A remembered allow can only turn `ask` into `allow` (never overrides a deny, a passkey rule or a high-risk tool), and expires after 90 days (exact call) or 30 days (whole tool). See `docs/REMEMBERED-DECISIONS.md`. |
+| **Remembered decisions** | "Allow always" / "Deny always" in Telegram store a revocable rule in the database. A remembered allow can only turn `ask` into `allow` (never overrides a deny, a passkey rule or a high-risk tool), and expires after 90 days (exact call) or 30 days (one repository, or the whole tool). See `docs/REMEMBERED-DECISIONS.md`. |
 
 ---
 
@@ -524,6 +524,7 @@ tools:
       wrap: "key_name" # Wrap response in {"key_name": data}
     risk: low|medium|high # Shown in the approval message; gates "Allow always" (see below)
     remember: args|signature # What "Allow always, exact call" matches. Default: args
+    remember_resource: { label: repo, template: "{owner}/{repo}" } # Adds "Allow always: this repo"
     audit: { redact_args: [body] } # Args replaced in the audit log
     preview: { ... } # What the approver sees; see "Approval previews" and config.example.yaml
 ```
@@ -536,6 +537,15 @@ signature *and* every argument the agent sent (a different time window, body or 
 asks again). `signature` matches the signature alone, for read-only tools whose signature already
 names what matters (`gmail_list_messages(in:inbox)` repeated with another `max_results` is the same
 request). Use it only on `risk: low` reads; never on a tool that writes or sends.
+
+**`remember_resource`** adds a third "Allow always" scope between the exact call and the whole
+tool: this tool, any arguments, for one value of *template* (`label` names it on the button). The
+template may only name required signature args. The GitHub tools use `{owner}/{repo}`, so
+"Allow always: this repo" on `gh_update_issue(octo/hello, 4)` lets that agent update any issue in
+`octo/hello` for 30 days and still asks for every other repository. The same limits as the tool
+scope apply: not for `risk: high` or unset risk, a passkey rule or a floor ask. To allow a repo
+permanently, write the rule in the agent file instead:
+`- { pattern: "gh_update_issue(octo/hello, *)", action: allow }`.
 
 **Signature templates** control how permission patterns match. For example, with `signature: "{domain}.{service}, {entity_id}"`, calling `ha_call_service` with `domain=light, service=turn_on, entity_id=light.bedroom` produces the signature `ha_call_service(light.turn_on, light.bedroom)`, which is matched against permission rules using glob patterns.
 
