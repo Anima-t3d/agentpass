@@ -33,6 +33,10 @@ VIEWS_CSS = r"""
   transform:translateY(-70%) rotate(45deg);pointer-events:none}
 .tools input[type="date"]{text-align:left;line-height:1.5}
 .tools input[type="date"]::-webkit-date-and-time-value{text-align:left}
+.select input[type="date"]{appearance:none;-webkit-appearance:none;position:relative;
+  padding-right:2.5rem;color-scheme:light dark}
+.select input[type="date"]::-webkit-calendar-picker-indicator{position:absolute;inset:0;
+  width:auto;height:auto;margin:0;padding:0;opacity:0;cursor:pointer}
 .hist-day{margin-bottom:var(--s5)}
 .hist-day-title{font-size:var(--fs-sm);font-weight:600;color:var(--muted);
   margin-bottom:var(--s2)}
@@ -154,7 +158,9 @@ function buildHistory() {
   const to = h('input', {cls: 'input', type: 'date', name: 'to'});
   const apply = h('button', {cls: 'btn btn-primary', type: 'submit'}, h('span', {text: 'Filter'}));
   const form = h('div', {cls: 'tools', role: 'search'}, field('Agent', agent), field('Tool', tool),
-    field('Decision', h('span', {cls: 'select'}, decision)), field('From', from), field('To', to), apply);
+    field('Decision', h('span', {cls: 'select'}, decision)),
+    field('From', h('span', {cls: 'select'}, from)), field('To', h('span', {cls: 'select'}, to)),
+    apply);
   const run = () => {
     hv.agent = agent.value.trim(); hv.tool = tool.value.trim();
     hv.decision = decision.value; hv.from = from.value; hv.to = to.value; hv.page = 1; loadHistory();

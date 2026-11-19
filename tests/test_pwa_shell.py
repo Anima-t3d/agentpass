@@ -341,3 +341,13 @@ def test_history_entries_open_details_and_selects_have_their_own_arrow():
         ".hist-item summary",
     ):
         assert needle in css, needle
+
+
+def test_date_filters_use_the_same_arrow_as_the_decision_select():
+    js = assets.APP_JS
+    assert "field('From', h('span', {cls: 'select'}, from))" in js
+    assert "field('To', h('span', {cls: 'select'}, to))" in js
+    css = assets.APP_CSS
+    # the native picker arrow is hidden but still covers the field, so a tap opens the picker
+    assert '.select input[type="date"]::-webkit-calendar-picker-indicator{' in css
+    assert "opacity:0" in css
