@@ -134,6 +134,8 @@ class Req:
     require: str = "passkey"
     preview: object = None
     agent_note: str | None = None
+    signature: str = ""
+    remember: object = None
 
 
 class Sink:
@@ -223,10 +225,16 @@ class Env:
         assert r.status == 200, await r.text()
         return (await r.json())["challenge"]
 
-    async def approve(self, approval_id, credential, **kw):
-        return await self.post(
-            f"/api/approvals/{approval_id}/approve", {"credential": credential}, **kw
-        )
+    async def approve(self, approval_id, credential, remember=None, **kw):
+        body = {"credential": credential}
+        if remember is not None:
+            body["remember"] = remember
+        return await self.post(f"/api/approvals/{approval_id}/approve", body, **kw)
+
+    async def challenge_for(self, approval_id, remember):
+        r = await self.post(f"/api/approvals/{approval_id}/challenge", {"remember": remember})
+        assert r.status == 200, await r.text()
+        return (await r.json())["challenge"]
 
     async def enrol(self):
         token = self.channel.page.tokens.issue()
@@ -740,3 +748,114 @@ async def test_page_reports_an_unknown_request_as_409(live):
     await env.send("ghost")  # shown on the page, but the coordinator has no such request
     r = await env.post("/api/approvals/ghost/deny")
     assert r.status == 409
+
+
+# --- "always" from the app ---
+
+MIRROR_SIG = "gh_mirror_fetch(o/r@main)"
+MIRROR_ARGS = {"owner": "o", "repo": "r", "branch": "main", "sha": "a" * 40}
+
+
+def _offer():
+    from agentpass.approval.channel import RememberOffer
+
+    return RememberOffer(
+        allow_exact=True,
+        allow_resource=True,
+        deny_resource=True,
+        resource="o/r",
+        resource_label="repo",
+        tool_fingerprint="f",
+    )
+
+
+async def _send_mirror(env, approval_id="m1"):
+    return await env.send(
+        approval_id,
+        dict(MIRROR_ARGS),
+        tool="gh_mirror_fetch",
+        require="any_trusted",
+        signature=MIRROR_SIG,
+        remember=_offer(),
+    )
+
+
+async def test_pending_lists_the_always_choices(env):
+    await _send_mirror(env)
+    (item,) = await env.pending()
+    assert item["remember"] == {
+        "label": "repo",
+        "allow": [
+            {"scope": "exact", "pattern": MIRROR_SIG, "days": 90},
+            {"scope": "resource", "pattern": "gh_mirror_fetch(o/r, *)", "days": 30},
+        ],
+        "deny": [
+            {"scope": "exact", "pattern": MIRROR_SIG, "days": None},
+            {"scope": "resource", "pattern": "gh_mirror_fetch(o/r, *)", "days": None},
+            {"scope": "tool", "pattern": "gh_mirror_fetch(*)", "days": None},
+        ],
+    }
+
+
+async def test_pending_without_an_offer_has_no_choices(env):
+    await env.send("a1")
+    (item,) = await env.pending()
+    assert item["remember"] is None
+
+
+async def test_challenge_binds_the_always_scope(env):
+    await env.enrol()
+    req = await _send_mirror(env)
+    once = b64d(await env.challenge("m1"))
+    always = b64d(await env.challenge_for("m1", "resource"))
+    assert once != always
+    assert always == approval_challenge(
+        req.approval_id, req.agent_id, req.tool, req.args, req.expires_at, remember="resource"
+    )
+
+
+async def test_approve_always_this_repo_passes_the_scope(env):
+    await env.enrol()
+    await _send_mirror(env)
+    ch = await env.challenge_for("m1", "resource")
+    r = await env.approve("m1", env.auth.assert_(ch), remember="resource")
+    assert r.status == 200, await r.text()
+    ((_, answer),) = env.sink.answers
+    assert answer.approved and answer.remember == "resource"
+
+
+async def test_a_once_assertion_cannot_approve_always(env):
+    await env.enrol()
+    await _send_mirror(env)
+    ch = await env.challenge("m1")
+    r = await env.approve("m1", env.auth.assert_(ch), remember="resource")
+    assert r.status == 403
+    assert env.sink.answers == []
+
+
+async def test_an_always_assertion_cannot_approve_once(env):
+    await env.enrol()
+    await _send_mirror(env)
+    ch = await env.challenge_for("m1", "tool")
+    r = await env.approve("m1", env.auth.assert_(ch))
+    assert r.status == 403
+    assert env.sink.answers == []
+
+
+@pytest.mark.parametrize("scope", ["everything", 3, ""])
+async def test_an_unknown_scope_is_refused(env, scope):
+    await env.enrol()
+    await _send_mirror(env)
+    r = await env.post("/api/approvals/m1/challenge", {"remember": scope})
+    assert r.status == 400
+    r = await env.post("/api/approvals/m1/deny", {"remember": scope})
+    assert r.status == 400
+    assert env.sink.answers == []
+
+
+async def test_deny_always_passes_the_scope(env):
+    await _send_mirror(env)
+    r = await env.post("/api/approvals/m1/deny", {"remember": "tool"})
+    assert r.status == 200, await r.text()
+    ((_, answer),) = env.sink.answers
+    assert not answer.approved and answer.remember == "tool"

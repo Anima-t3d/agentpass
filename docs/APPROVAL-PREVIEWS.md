@@ -187,6 +187,7 @@ Template renderer:
 - For `gh_update_pull` / `gh_update_issue`: `GET` the current object and show a field-level before/after for every changed field (title, body diff, state open -> closed, base branch change, labels added/removed, assignees). Fields not in the args are not shown as changing.
 - For `gh_create_issue`: title, body, labels (and a warning if a label does not exist, via the label list lookup, optional).
 - For `gh_create_issue_comment`: target issue/PR title and state (lookup) plus the comment body.
+- For `gh_merge_pull_request` (PUT .../pulls/{n}/merge, `risk: high`, passkey through the floor rule `gh_merge_*`): the agent passes the head sha it read with `gh_get_pull`; GitHub refuses the merge if the branch moved, so the approval binds one commit. The preview shows the pull request, branches, approved and current head sha, commits/files/+/- and the merge method, and warns on conflicts (`mergeable_state: dirty`), branch protection (`blocked`) or a closed pull request.
 
 ### 4.6 ha_call_service and ha_fire_event
 
@@ -209,7 +210,7 @@ Renderer `automation`, lookup `current` = `GET /api/config/automation/config/{au
 
 ### 4.7 gh_mirror_fetch
 
-Tool in `tools/git_mirror.yaml` (service `handler: python`, see DESIGN.md 5.5). Args `owner`, `repo`, `branch` (same validation as the GitHub tools) and `sha` (required, 40 or 64 lowercase hex). Signature `{owner}/{repo}@{branch}`. `sha` is not in the signature, but like every arg it is in the canonical args and therefore **in the approval proof** (section 7): the operator approves "move this branch of the mirror to exactly this commit". The helper then fetches and leaves the mirror ref at that sha or fails without moving it ("branch moved since approval"), the same fail-safe binding as the blob sha of `gh_put_contents`. The agent reads the tip first with `gh_get_branch` and passes its sha. Policy `policy/git_mirror.yaml`: `ask`.
+Tool in `tools/git_mirror.yaml` (service `handler: python`, see DESIGN.md 5.5). Args `owner`, `repo`, `branch` (same validation as the GitHub tools) and `sha` (required, 40 or 64 lowercase hex). Signature `{owner}/{repo}@{branch}`. `sha` is not in the signature, but like every arg it is in the canonical args and therefore **in the approval proof** (section 7): the operator approves "move this branch of the mirror to exactly this commit". The helper then fetches and leaves the mirror ref at that sha or fails without moving it ("branch moved since approval"), the same fail-safe binding as the blob sha of `gh_put_contents`. The agent reads the tip first with `gh_get_branch` and passes its sha. Policy `policy/git_mirror.yaml`: `ask`. "Allow always: this repo" (`remember_resource` `{owner}/{repo}`) may cover every branch of one repository; an allowed fetch runs inside the agent call, which is fine for fetches that take seconds and bounded by the agent tool timeout otherwise. The mirror allowlist still limits which repositories can be fetched at all.
 
 Template renderer. The lookups are not HTTP paths: the plugin answers `/commit` and `/relation` by asking the helper, which reads the GitHub API with its own read-only token.
 

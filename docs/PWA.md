@@ -70,6 +70,8 @@ Each notification names the agent and tool and carries the preview headline. **D
 
 When a request resolves, in the app, in Telegram or by timeout, a "resolved" push replaces the notification on every device. A notification tapped after that fails cleanly with "already resolved". "Allow always" and "Deny always" remembered rules are not offered from notifications, only in the app.
 
+In the app, a request that offers them shows "Remember this answer": just this once, or always for this exact call, this repository (tools with `remember_resource`) or this tool. The text under it names the exact pattern and expiry each button would store, and a button whose side does not offer that scope is disabled. An "Approve always" signs the scope with the passkey: the challenge adds `remember:<scope>`, so an assertion made for "once" cannot store a rule and the other way round. The gateway checks the scope against the offer again.
+
 ## One-tap approve
 
 One-tap approve lets the notification's Approve button answer without opening the app.

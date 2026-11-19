@@ -146,11 +146,51 @@ class PendingApproval:
     # Gateway-built preview as plain data (Preview.to_dict or {"unavailable": reason}), or None
     preview: dict[str, Any] | None = None
     agent_note: str | None = None  # sanitized, unverified agent text
+    # The "always" choices (remember_choices); None when the request offers none
+    remember: dict[str, Any] | None = None
 
-    def challenge(self) -> bytes:
+    def challenge(self, remember: str | None = None) -> bytes:
         return approval_challenge(
-            self.approval_id, self.agent_id, self.tool, self.args, self.expires_at
+            self.approval_id, self.agent_id, self.tool, self.args, self.expires_at, remember
         )
+
+
+SCOPES = ("exact", "resource", "tool")
+
+
+def remember_choices(offer: Any, tool: str, signature: str) -> dict[str, Any] | None:
+    """The "always" answers a request offers, with the pattern and lifetime each stores.
+
+    Display only: the coordinator checks the chosen scope against the offer again.
+    """
+    if offer is None:
+        return None
+    from agentpass.remembered import pattern_for
+
+    def side(approved: bool) -> list[dict[str, Any]]:
+        out = []
+        for scope in SCOPES:
+            if not offer.permits(approved, scope):
+                continue
+            days = getattr(offer, f"allow_{scope}_days") if approved else None
+            pattern = pattern_for(scope, tool, signature, offer.resource)
+            out.append({"scope": scope, "pattern": pattern, "days": days})
+        return out
+
+    allow, deny = side(True), side(False)
+    if not allow and not deny:
+        return None
+    return {"label": offer.resource_label, "allow": allow, "deny": deny}
+
+
+def _scope(body: Any) -> str | None:
+    """The "remember" field of a request body: None (once) or one known scope."""
+    value = body.get("remember") if isinstance(body, dict) else None
+    if value is None:
+        return None
+    if value not in SCOPES:
+        raise _http(400, "unknown remember scope")
+    return value
 
 
 AnswerFn = Callable[[str, Answer], Awaitable[AnswerStatus]]
@@ -504,6 +544,7 @@ class ApprovalPage:
                 "require": p.require,
                 "preview": display_safe(p.preview),
                 "agent_note": display_safe(p.agent_note),
+                "remember": display_safe(p.remember),
             }
             for p in self.pending.values()
             if p.expires_at > now
@@ -517,9 +558,10 @@ class ApprovalPage:
         creds = self.store.list()
         if not creds:
             raise _http(409, "no passkey enrolled")
+        remember = _scope(await _body(request))
         options = generate_authentication_options(
             rp_id=self.config.rp_id,
-            challenge=pending.challenge(),
+            challenge=pending.challenge(remember),
             allow_credentials=[PublicKeyCredentialDescriptor(id=_b64d(c.id)) for c in creds],
             user_verification=UserVerificationRequirement.REQUIRED,
         )
@@ -540,11 +582,12 @@ class ApprovalPage:
         except Exception:
             body = None
         credential = body.get("credential") if isinstance(body, dict) else None
+        remember = _scope(body)
         try:
             verified = verify_approval_assertion(
                 self.store,
                 credential,
-                challenge=pending.challenge(),
+                challenge=pending.challenge(remember),
                 rp_id=self.config.rp_id,
                 origin=self.config.origin,
             )
@@ -560,6 +603,7 @@ class ApprovalPage:
                 "sign_count": verified.new_sign_count,
                 "challenge": bytes_to_base64url(verified.challenge),
             },
+            remember,
         )
 
     async def _deny(self, request: web.Request) -> web.Response:
@@ -567,10 +611,18 @@ class ApprovalPage:
         pending = self.pending.get(request.match_info["id"])
         if pending is None:
             raise _http(404, "no such pending approval")
-        return await self._deliver(pending, False, f"passkey-page:{self.source(request)}", None)
+        remember = _scope(await _body(request))
+        return await self._deliver(
+            pending, False, f"passkey-page:{self.source(request)}", None, remember
+        )
 
     async def _deliver(
-        self, pending: PendingApproval, approved: bool, approver: str, proof: dict | None
+        self,
+        pending: PendingApproval,
+        approved: bool,
+        approver: str,
+        proof: dict | None,
+        remember: str | None = None,
     ) -> web.Response:
         if self.answer is None:
             raise _http(409, "approval channel not running")
@@ -579,7 +631,7 @@ class ApprovalPage:
             raise _http(409, "already resolved")
         try:
             status = await self.answer(
-                pending.approval_id, Answer(approved, "passkey", approver, proof)
+                pending.approval_id, Answer(approved, "passkey", approver, proof, remember)
             )
         except Exception:
             self.pending.setdefault(pending.approval_id, pending)

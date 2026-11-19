@@ -351,3 +351,13 @@ def test_date_filters_use_the_same_arrow_as_the_decision_select():
     # the native picker arrow is hidden but still covers the field, so a tap opens the picker
     assert '.select input[type="date"]::-webkit-calendar-picker-indicator{' in css
     assert "opacity:0" in css
+
+
+def test_the_card_offers_always_and_signs_the_scope():
+    from agentpass.passkey import assets
+
+    js = assets.APP_JS
+    assert "Remember this answer" in js and "Just this once" in js
+    assert "'/challenge', scope ? {remember: scope} : {}" in js
+    assert "{credential: await sign(s.id, scope), ...extra}" in js
+    assert ".remember-hint" in assets.APP_CSS

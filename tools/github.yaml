@@ -470,6 +470,48 @@ tools:
     risk: medium
     remember_resource: *repo_resource
 
+  gh_merge_pull_request:
+    description: >-
+      Merge a pull request. First read it with gh_get_pull and pass its head.sha as sha;
+      GitHub refuses the merge if the branch moved since. merge_method: merge (default),
+      squash or rebase.
+    signature: "{owner}/{repo}, {number}"
+    args:
+      owner: *owner
+      repo: *repo
+      number: *number
+      sha:
+        { type: string, required: true, validate: "[0-9a-f]{40}|[0-9a-f]{64}", signature: false, description: "Head commit sha of the pull request, from gh_get_pull" }
+      merge_method: { type: enum, values: [merge, squash, rebase], default: merge, signature: false }
+      commit_title: { type: string, max_length: 256, signature: false }
+      commit_message: { type: text, max_length: 65536, signature: false }
+    preview:
+      lookups:
+        - { id: current, path: "/repos/{owner}/{repo}/pulls/{number}", on_error: omit }
+      title: "Merge pull request #{number} into {current.base.ref} in {owner}/{repo}"
+      summary: "Merge pull request #{number} {current.title} into {current.base.ref} in {owner}/{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Pull request", value: "#{number} {current.title} ({current.state})" }
+        - { label: "Branches", value: "{current.head.ref} into {current.base.ref}" }
+        - { label: "Approved head commit", value: "{sha}" }
+        - { label: "Head commit now", value: "{current.head.sha}" }
+        - { label: "Changes", value: "{current.commits} commits, {current.changed_files} files, +{current.additions} / -{current.deletions}" }
+        - { label: "Merge method", value: "{merge_method}" }
+        - { label: "Commit title", value: "{commit_title}" }
+      warnings:
+        - { when: { value: "{current.mergeable_state}", equals: "dirty" }, text: "GitHub reports conflicts with the base branch" }
+        - { when: { value: "{current.mergeable_state}", equals: "blocked" }, text: "Branch protection blocks this merge (checks or reviews)" }
+        - { when: { value: "{current.state}", equals: "closed" }, text: "The pull request is closed" }
+    request:
+      method: PUT
+      path: "/repos/{owner}/{repo}/pulls/{number}/merge"
+      headers: *headers
+      body: { include: [sha, merge_method, commit_title, commit_message] }
+    response: { max_bytes: 65536 }
+    audit: { redact_args: [commit_message], store_result: truncated }
+    risk: high
+
   gh_dispatch_workflow:
     description: "Trigger a workflow_dispatch event"
     signature: "{owner}/{repo}, {workflow}"

@@ -772,6 +772,7 @@ GH_CASES = {
         ),
         ("gh_update_issue", {**REPO, "number": 1, "state": "closed"}),
         ("gh_update_pull", {**REPO, "number": 2, "title": "t"}),
+        ("gh_merge_pull_request", {**REPO, "number": 2, "sha": "b" * 40}),
     ],
     "deny": [
         ("gh_delete_repo", REPO),
