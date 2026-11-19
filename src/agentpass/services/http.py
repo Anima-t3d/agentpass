@@ -32,6 +32,23 @@ class HTTPUnauthorizedError(HTTPServiceError, ServiceUnauthorizedError):
     """The service answered 401 to the gateway's own credentials."""
 
 
+async def _read_capped(stream: aiohttp.StreamReader, max_bytes: int) -> bytes:
+    """The whole body, or the first ``max_bytes + 1`` bytes when it is longer.
+
+    ``StreamReader.read(n)`` returns what has arrived so far, at most *n* bytes, so a body
+    that comes in several network chunks needs a loop; one call can cut it short.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = await stream.read(max_bytes + 1 - total)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
 class GenericHTTPService(ServiceHandler):
     """Service handler that executes YAML-defined HTTP tool requests.
 
@@ -202,7 +219,7 @@ class GenericHTTPService(ServiceHandler):
                         raise HTTPServiceError(f"HTTP {resp.status}")
                     if resp.content_length is not None and resp.content_length > max_bytes:
                         raise HTTPServiceError("response too large")
-                    raw = await resp.content.read(max_bytes + 1)
+                    raw = await _read_capped(resp.content, max_bytes)
                     if len(raw) > max_bytes:
                         raise HTTPServiceError("response too large")
                     try:
@@ -227,7 +244,7 @@ class GenericHTTPService(ServiceHandler):
             return await resp.json()
         if resp.content_length is not None and max_bytes and resp.content_length > max_bytes:
             raise HTTPServiceError("Response too large")
-        raw = await resp.content.read(max_bytes + 1 if max_bytes else -1)
+        raw = await (_read_capped(resp.content, max_bytes) if max_bytes else resp.content.read())
         if max_bytes and len(raw) > max_bytes:
             raise HTTPServiceError("Response too large")
         if rtype == "json":

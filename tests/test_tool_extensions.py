@@ -44,7 +44,12 @@ def _resp(json_data=None, raw: bytes | None = None, content_length=None):
     resp.status = 200
     resp.json = AsyncMock(return_value=json_data if json_data is not None else {})
     resp.content_length = content_length
-    resp.content.read = AsyncMock(return_value=raw if raw is not None else b"{}")
+    body = [raw if raw is not None else b"{}"]
+
+    async def read(n=-1):  # like aiohttp: the body once, then b"" at the end
+        return body.pop() if body else b""
+
+    resp.content.read = read
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=resp)
     cm.__aexit__ = AsyncMock(return_value=False)
