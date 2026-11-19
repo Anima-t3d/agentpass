@@ -244,12 +244,20 @@ class ResponseDefinition:
 
 
 RESERVED_ARG_NAMES = ("agent_note", "idempotency_key")  # gateway-added properties on every tool
-PREVIEW_RENDERERS = ("template", "email", "diff", "entity_state", "resource_summary")
+PREVIEW_RENDERERS = (
+    "template",
+    "email",
+    "diff",
+    "entity_state",
+    "resource_summary",
+    "automation",
+)
 # Parameters a built-in renderer accepts next to the common keys, and the kind of value
 PREVIEW_RENDERER_PARAMS: dict[str, dict[str, str]] = {
     "entity_state": {"entity": "str"},
     "email": {"internal_domains": "domains", "telegram": "telegram"},
     "diff": {"max_bytes": "int", "max_lines": "int", "max_diff_chars": "int"},
+    "automation": {"max_lines": "int", "max_diff_chars": "int"},
 }
 PREVIEW_ON_ERROR = ("unavailable", "omit")
 PREVIEW_COMPARISONS = ("equals", "in", "not_in", "endswith_not")

@@ -91,6 +91,15 @@ The `domain` and `service` args are used for the URL path. All other args (entit
 agentpass request ha_render_template template="{{ states('sensor.temperature') }} degrees"
 ```
 
+**Read or change an automation's definition** (only automations made in the UI have an id; it is the `id` attribute of the `automation.*` entity, not the entity_id):
+
+```bash
+# exec with background: false
+agentpass request ha_get_automation_config automation_id=1700000000001
+```
+
+`ha_set_automation_config` replaces the whole automation (`alias`, `triggers`, `actions` required; `conditions`, `description`, `mode`, `max`, `variables` optional; plural keys) and `ha_delete_automation_config` removes it. Both need approval, usually a passkey: read the current definition first and send the complete new one.
+
 ### Always denied (blocked by policy)
 
 - `ha_fire_event` — firing custom events is blocked

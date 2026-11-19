@@ -81,7 +81,7 @@ tools:
 Rules:
 
 - `renderer: template` (default when `fields` is given) is pure data: `lookups` plus `fields`, with `{arg}` and `{lookup_id.json.path}` substitution. Substitution output is always a plain string, capped at `max_chars` (default 2000 per field). No expressions, no conditionals, no code.
-- `renderer: <name>` selects a built-in (`email`, `diff`, `entity_state`, `resource_summary`). A built-in takes its own parameters under the same block.
+- `renderer: <name>` selects a built-in (`email`, `diff`, `entity_state`, `resource_summary`, `automation`). A built-in takes its own parameters under the same block.
 - `lookups` are **GET-only**, run through the same service client as normal calls (same credentials, same SSRF-safe URL building, same response size cap). `config.py` rejects any lookup whose method is not GET/HEAD at load time. `check-config` lints that every `{placeholder}` refers to a declared arg or lookup id.
 - A lookup is made **by the service named by the tool**. A preview cannot call another service, and the URL host cannot come from an arg.
 - `warnings:` is an optional list of `{when: <simple comparison>, text: ...}` using a tiny fixed comparison set (`equals`, `in`, `not_in`, `endswith_not`); anything richer belongs in a built-in renderer.
@@ -97,6 +97,7 @@ Tools without a `preview:` block show the current raw-args view. `check-config -
 | `diff` | old text (lookup), new text (arg) | unified diff, stats |
 | `entity_state` | entity id + service call | device kv, current state, effect line |
 | `resource_summary` | one or more GETs | kv table of selected fields, counts |
+| `automation` | current automation (lookup), new definition (args) | kv facts, list of calls, YAML diff, warnings |
 
 Each renderer is a pure function `(args, lookup_results) -> Preview` and is unit-testable without network.
 
@@ -196,6 +197,15 @@ Renderer `entity_state`:
 - Missing `entity_id`: services like `homeassistant.restart` or `script.turn_on` may target everything. Show "no entity specified: acts on ALL matching targets / the whole system" as a warning. If the HA lookup 404s: "entity not found; HA will reject or ignore".
 - `ha_fire_event`: no entity. Show event type and the request body (event data) as JSON. Optional lookup: none. Warning: events can trigger automations, whose effect the gateway cannot see. Optionally, if the config provides `preview.automations_lookup`, `GET /api/states` filtered to automations is not feasible generically, so by default say only "may trigger automations listening for this event".
 - Honest limit: for `script.*`, `scene.*`, `automation.trigger`, the preview shows the entity's friendly name and state but not what the script does (HA does not expose that over the plain REST API). The renderer prints "runs script X (contents not shown)".
+
+### 4.6a ha_set_automation_config and ha_delete_automation_config
+
+Renderer `automation`, lookup `current` = `GET /api/config/automation/config/{automation_id}` (`on_error: omit`; a 404 means a new automation).
+
+- Both definitions are shown as YAML in the order of Home Assistant's editor, without the `id`. The old singular keys (`trigger`, `condition`, `action`) are compared as the plural ones, so an automation saved before 2024.10 does not show as rewritten.
+- Write: a unified diff against the current definition, or the whole new one; "identical: no change" when nothing differs. Delete: the whole current definition as removed lines.
+- Calls: every `action`/`service` in the actions, in order, and every fired `event`. A call into `lock`, `alarm_control_panel` or `cover` gets a warning that it needs a passkey when asked directly but runs without one inside the automation. `homeassistant`, `hassio`, `shell_command`, `rest_command` and `python_script` calls get a warning of their own. Templates are flagged: what they evaluate to is not shown.
+- Every write carries "Runs on its own whenever it triggers; its actions are not approved again". Policy should require a passkey for both tools (`policy/_floor.example.yaml`).
 
 ### 4.7 gh_mirror_fetch
 

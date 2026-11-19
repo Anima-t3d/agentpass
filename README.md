@@ -79,6 +79,8 @@ rules:
     action: deny
 ```
 
+An automation runs on its own whenever it triggers, so writing one through `ha_set_automation_config` approves every later run of its actions. Keep it behind an approval at least as strong as the strongest service it could call (see `policy/_floor.example.yaml`).
+
 **3. Start the gateway**
 
 ```bash
@@ -404,6 +406,7 @@ A tool can declare a `preview:` block so the approver sees what the call will do
 | `resource_summary` | `gh_delete_repo` | What is removed, repository facts, typed confirmation of the repo name |
 | `email` | `gmail_send_message` | Headers, text body, links, attachment list, header warnings. HTML mail is shown as converted text and nothing remote is fetched |
 | `diff` | `gh_put_contents` | New file or unified diff, commit message, base sha check, default branch warning. Binary and oversized files show sizes and hashes |
+| `automation` | `ha_set_automation_config`, `ha_delete_automation_config` | The automation as YAML, diffed against the current one, every service it calls, and a warning for lock, alarm and cover calls that would need a passkey if made directly |
 
 Every tool gets an optional `agent_note` property: a short "why I need this" shown to the approver in a box marked as unverified agent text. Agents should fill it in for calls that may need a passkey approval. It is not signed and not used for policy. The audit dashboard lists each request's preview title, status and digest plus the agent note.
 

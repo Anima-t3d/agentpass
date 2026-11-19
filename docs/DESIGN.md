@@ -154,7 +154,7 @@ The approver sees what a call will do, not only the tool name and JSON. The full
 - Renderers emit plain strings and structured section kinds only; the page has the one escaping point and a strict CSP. Mail is converted to text and never rendered as HTML; attachments are listed, never opened.
 - Previews go to trusted channels only (the page in full, Telegram a short summary). The stored preview is deleted when the request resolves. The audit keeps the digest, title, status and agent note, shown in the dashboard, and no bodies or diffs.
 
-Built-in renderers: `template` (declarative fields), `entity_state` (Home Assistant), `resource_summary` (repository delete, with typed confirmation of the repo name), `email` (`gmail_send_message`), `diff` (`gh_put_contents`: new file or change, binary and oversized files shown as sizes and hashes, 400 line cap, stale base sha warning).
+Built-in renderers: `template` (declarative fields), `entity_state` (Home Assistant), `resource_summary` (repository delete, with typed confirmation of the repo name), `email` (`gmail_send_message`), `diff` (`gh_put_contents`: new file or change, binary and oversized files shown as sizes and hashes, 400 line cap, stale base sha warning), `automation` (Home Assistant automation definitions: YAML diff, every service called, passkey-domain warnings).
 
 ## 4. Approval channel interface and coordinator
 

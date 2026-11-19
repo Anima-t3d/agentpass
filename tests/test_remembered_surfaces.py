@@ -48,6 +48,10 @@ RISK_TABLE = {
         # domain/service are arguments, so this cannot be split by domain: high
         "ha_call_service": "high",
         "ha_fire_event": "high",
+        "ha_get_automation_config": "low",
+        # an automation runs later without asking, so writing or deleting one is high
+        "ha_set_automation_config": "high",
+        "ha_delete_automation_config": "high",
     },
 }
 

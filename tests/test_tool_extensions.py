@@ -338,6 +338,13 @@ HA_GOLDEN = [
         "ha_call_service(homeassistant.restart)",
     ),
     ("ha_fire_event", {"event_type": "my.event"}, "ha_fire_event(my.event)"),
+    ("ha_get_automation_config", {"automation_id": "17"}, "ha_get_automation_config(17)"),
+    (
+        "ha_set_automation_config",
+        {"automation_id": "17", "alias": "A", "triggers": [{}], "actions": [{}]},
+        "ha_set_automation_config(17)",  # the definition never changes it
+    ),
+    ("ha_delete_automation_config", {"automation_id": "17"}, "ha_delete_automation_config(17)"),
 ]
 
 
@@ -374,6 +381,9 @@ def test_ha_signature_templates_unchanged(ha_registry):
         "ha_render_template": "{template}",
         "ha_call_service": "{domain}.{service}, {entity_id}",
         "ha_fire_event": "{event_type}",
+        "ha_get_automation_config": "{automation_id}",
+        "ha_set_automation_config": "{automation_id}",
+        "ha_delete_automation_config": "{automation_id}",
     }
 
 

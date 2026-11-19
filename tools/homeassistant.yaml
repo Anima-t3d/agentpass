@@ -141,3 +141,87 @@ tools:
       method: POST
       path: "/api/events/{event_type}"
       body_exclude: [event_type]
+
+  # Automation definitions (the config API Home Assistant's own editor uses). Only automations
+  # made in the UI, stored in automations.yaml, have an id and can be read or written here.
+  ha_get_automation_config:
+    description: >-
+      Get an automation's definition (alias, triggers, conditions, actions) by its id. The id
+      is the `id` attribute of the automation.* entity (see ha_get_state), not the entity_id.
+    signature: "{automation_id}"
+    args:
+      automation_id:
+        required: true
+        validate: "^[A-Za-z0-9_-]{1,64}$"
+        description: "The automation's id attribute"
+    risk: low
+    request:
+      method: GET
+      path: "/api/config/automation/config/{automation_id}"
+
+  ha_set_automation_config:
+    description: >-
+      Create or replace an automation. An existing id is replaced as a whole; a new id creates
+      one. Home Assistant validates and reloads automations on save. Use the plural keys
+      triggers, conditions and actions, as in Home Assistant 2024.10 and later.
+    signature: "{automation_id}"
+    args:
+      automation_id:
+        required: true
+        validate: "^[A-Za-z0-9_-]{1,64}$"
+        description: "The automation's id attribute; a new one creates an automation"
+      alias:
+        { required: true, type: string, max_length: 200, signature: false, description: "Name" }
+      description: { type: text, max_length: 2000, signature: false }
+      mode:
+        type: enum
+        values: [single, restart, queued, parallel]
+        signature: false
+        description: "What happens when it triggers while still running"
+      max: { type: integer, min: 1, max: 100, signature: false, description: "For queued/parallel" }
+      variables: { type: object, signature: false }
+      triggers:
+        required: true
+        type: array
+        items: { type: object }
+        max_items: 50
+        signature: false
+      conditions:
+        type: array
+        items: { type: object }
+        max_items: 50
+        signature: false
+      actions:
+        required: true
+        type: array
+        items: { type: object }
+        max_items: 100
+        signature: false
+    risk: high
+    preview:
+      renderer: automation
+      lookups:
+        # a 404 means a new automation; any other failure only drops the diff
+        - { id: current, path: "/api/config/automation/config/{automation_id}", on_error: omit }
+    request:
+      method: POST
+      path: "/api/config/automation/config/{automation_id}"
+      body:
+        include: [alias, description, mode, max, variables, triggers, conditions, actions]
+
+  ha_delete_automation_config:
+    description: "Delete an automation made in the UI, by its id attribute"
+    signature: "{automation_id}"
+    args:
+      automation_id:
+        required: true
+        validate: "^[A-Za-z0-9_-]{1,64}$"
+        description: "The automation's id attribute"
+    risk: high
+    preview:
+      renderer: automation
+      lookups:
+        - { id: current, path: "/api/config/automation/config/{automation_id}", on_error: omit }
+    request:
+      method: DELETE
+      path: "/api/config/automation/config/{automation_id}"
