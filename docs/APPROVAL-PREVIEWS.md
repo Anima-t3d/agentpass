@@ -81,7 +81,7 @@ tools:
 Rules:
 
 - `renderer: template` (default when `fields` is given) is pure data: `lookups` plus `fields`, with `{arg}` and `{lookup_id.json.path}` substitution. Substitution output is always a plain string, capped at `max_chars` (default 2000 per field). No expressions, no conditionals, no code.
-- `renderer: <name>` selects a built-in (`email`, `diff`, `entity_state`, `resource_summary`). A built-in takes its own parameters under the same block.
+- `renderer: <name>` selects a built-in (`email`, `diff`, `entity_state`, `resource_summary`, `automation`). A built-in takes its own parameters under the same block.
 - `lookups` are **GET-only**, run through the same service client as normal calls (same credentials, same SSRF-safe URL building, same response size cap). `config.py` rejects any lookup whose method is not GET/HEAD at load time. `check-config` lints that every `{placeholder}` refers to a declared arg or lookup id.
 - A lookup is made **by the service named by the tool**. A preview cannot call another service, and the URL host cannot come from an arg.
 - `warnings:` is an optional list of `{when: <simple comparison>, text: ...}` using a tiny fixed comparison set (`equals`, `in`, `not_in`, `endswith_not`); anything richer belongs in a built-in renderer.
@@ -97,6 +97,7 @@ Tools without a `preview:` block show the current raw-args view. `check-config -
 | `diff` | old text (lookup), new text (arg) | unified diff, stats |
 | `entity_state` | entity id + service call | device kv, current state, effect line |
 | `resource_summary` | one or more GETs | kv table of selected fields, counts |
+| `automation` | current automation (lookup), new definition (args) | kv facts, list of calls, YAML diff, warnings |
 
 Each renderer is a pure function `(args, lookup_results) -> Preview` and is unit-testable without network.
 
@@ -186,6 +187,7 @@ Template renderer:
 - For `gh_update_pull` / `gh_update_issue`: `GET` the current object and show a field-level before/after for every changed field (title, body diff, state open -> closed, base branch change, labels added/removed, assignees). Fields not in the args are not shown as changing.
 - For `gh_create_issue`: title, body, labels (and a warning if a label does not exist, via the label list lookup, optional).
 - For `gh_create_issue_comment`: target issue/PR title and state (lookup) plus the comment body.
+- For `gh_merge_pull_request` (PUT .../pulls/{n}/merge, `risk: high`, passkey through the floor rule `gh_merge_*`): the agent passes the head sha it read with `gh_get_pull`; GitHub refuses the merge if the branch moved, so the approval binds one commit. The preview shows the pull request, branches, approved and current head sha, commits/files/+/- and the merge method, and warns on conflicts (`mergeable_state: dirty`), branch protection (`blocked`) or a closed pull request.
 
 ### 4.6 ha_call_service and ha_fire_event
 
@@ -197,9 +199,18 @@ Renderer `entity_state`:
 - `ha_fire_event`: no entity. Show event type and the request body (event data) as JSON. Optional lookup: none. Warning: events can trigger automations, whose effect the gateway cannot see. Optionally, if the config provides `preview.automations_lookup`, `GET /api/states` filtered to automations is not feasible generically, so by default say only "may trigger automations listening for this event".
 - Honest limit: for `script.*`, `scene.*`, `automation.trigger`, the preview shows the entity's friendly name and state but not what the script does (HA does not expose that over the plain REST API). The renderer prints "runs script X (contents not shown)".
 
+### 4.6a ha_set_automation_config and ha_delete_automation_config
+
+Renderer `automation`, lookup `current` = `GET /api/config/automation/config/{automation_id}` (`on_error: omit`; a 404 means a new automation).
+
+- Both definitions are shown as YAML in the order of Home Assistant's editor, without the `id`. The old singular keys (`trigger`, `condition`, `action`) are compared as the plural ones, so an automation saved before 2024.10 does not show as rewritten.
+- Write: a unified diff against the current definition, or the whole new one; "identical: no change" when nothing differs. Delete: the whole current definition as removed lines.
+- Calls: every `action`/`service` in the actions, in order, and every fired `event`. A call into `lock`, `alarm_control_panel` or `cover` gets a warning that it needs a passkey when asked directly but runs without one inside the automation. `homeassistant`, `hassio`, `shell_command`, `rest_command` and `python_script` calls get a warning of their own. Templates are flagged: what they evaluate to is not shown.
+- Every write carries "Runs on its own whenever it triggers; its actions are not approved again". Policy should require a passkey for both tools (`policy/_floor.example.yaml`).
+
 ### 4.7 gh_mirror_fetch
 
-Tool in `tools/git_mirror.yaml` (service `handler: python`, see DESIGN.md 5.5). Args `owner`, `repo`, `branch` (same validation as the GitHub tools) and `sha` (required, 40 or 64 lowercase hex). Signature `{owner}/{repo}@{branch}`. `sha` is not in the signature, but like every arg it is in the canonical args and therefore **in the approval proof** (section 7): the operator approves "move this branch of the mirror to exactly this commit". The helper then fetches and leaves the mirror ref at that sha or fails without moving it ("branch moved since approval"), the same fail-safe binding as the blob sha of `gh_put_contents`. The agent reads the tip first with `gh_get_branch` and passes its sha. Policy `policy/git_mirror.yaml`: `ask`.
+Tool in `tools/git_mirror.yaml` (service `handler: python`, see DESIGN.md 5.5). Args `owner`, `repo`, `branch` (same validation as the GitHub tools) and `sha` (required, 40 or 64 lowercase hex). Signature `{owner}/{repo}@{branch}`. `sha` is not in the signature, but like every arg it is in the canonical args and therefore **in the approval proof** (section 7): the operator approves "move this branch of the mirror to exactly this commit". The helper then fetches and leaves the mirror ref at that sha or fails without moving it ("branch moved since approval"), the same fail-safe binding as the blob sha of `gh_put_contents`. The agent reads the tip first with `gh_get_branch` and passes its sha. Policy `policy/git_mirror.yaml`: `ask`. "Allow always: this repo" (`remember_resource` `{owner}/{repo}`) may cover every branch of one repository; an allowed fetch runs inside the agent call, which is fine for fetches that take seconds and bounded by the agent tool timeout otherwise. The mirror allowlist still limits which repositories can be fetched at all.
 
 Template renderer. The lookups are not HTTP paths: the plugin answers `/commit` and `/relation` by asking the helper, which reads the GitHub API with its own read-only token.
 

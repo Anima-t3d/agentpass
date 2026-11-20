@@ -14,7 +14,12 @@ from urllib.parse import quote
 from aiohttp import web
 
 from agentpass.approval.channel import ApprovalChannel, ChannelHandle
-from agentpass.passkey.page import ApprovalPage, PasskeyConfig, PendingApproval
+from agentpass.passkey.page import (
+    ApprovalPage,
+    PasskeyConfig,
+    PendingApproval,
+    remember_choices,
+)
 from agentpass.passkey.store import EnrolmentTokens, PasskeyStore
 from agentpass.passkey.verify import parse_expiry
 
@@ -58,6 +63,9 @@ class PasskeyChannel(ApprovalChannel):
             require=str(getattr(req, "require", "any_trusted")),
             preview=req.preview.to_dict() if getattr(req, "preview", None) is not None else None,
             agent_note=getattr(req, "agent_note", None),
+            remember=remember_choices(
+                getattr(req, "remember", None), req.tool, getattr(req, "signature", "") or ""
+            ),
         )
         return ChannelHandle(channel=self.name, ref={"approval_id": req.approval_id})
 

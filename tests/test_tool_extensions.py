@@ -44,7 +44,12 @@ def _resp(json_data=None, raw: bytes | None = None, content_length=None):
     resp.status = 200
     resp.json = AsyncMock(return_value=json_data if json_data is not None else {})
     resp.content_length = content_length
-    resp.content.read = AsyncMock(return_value=raw if raw is not None else b"{}")
+    body = [raw if raw is not None else b"{}"]
+
+    async def read(n=-1):  # like aiohttp: the body once, then b"" at the end
+        return body.pop() if body else b""
+
+    resp.content.read = read
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=resp)
     cm.__aexit__ = AsyncMock(return_value=False)
@@ -338,6 +343,13 @@ HA_GOLDEN = [
         "ha_call_service(homeassistant.restart)",
     ),
     ("ha_fire_event", {"event_type": "my.event"}, "ha_fire_event(my.event)"),
+    ("ha_get_automation_config", {"automation_id": "17"}, "ha_get_automation_config(17)"),
+    (
+        "ha_set_automation_config",
+        {"automation_id": "17", "alias": "A", "triggers": [{}], "actions": [{}]},
+        "ha_set_automation_config(17)",  # the definition never changes it
+    ),
+    ("ha_delete_automation_config", {"automation_id": "17"}, "ha_delete_automation_config(17)"),
 ]
 
 
@@ -374,6 +386,9 @@ def test_ha_signature_templates_unchanged(ha_registry):
         "ha_render_template": "{template}",
         "ha_call_service": "{domain}.{service}, {entity_id}",
         "ha_fire_event": "{event_type}",
+        "ha_get_automation_config": "{automation_id}",
+        "ha_set_automation_config": "{automation_id}",
+        "ha_delete_automation_config": "{automation_id}",
     }
 
 
@@ -746,6 +761,7 @@ GH_CASES = {
     ],
     "ask": [
         ("gh_create_issue", {**REPO, "title": "t"}),
+        ("gh_create_repo", {"name": "new-repo", "private": True}),
         ("gh_create_issue_comment", {**REPO, "number": 1, "body": "hi (there), *x*"}),
         ("gh_create_pull", {**REPO, "title": "t", "head": "feat/x", "base": "main"}),
         ("gh_dispatch_workflow", {**REPO, "workflow": "ci.yml", "ref": "main"}),
@@ -756,6 +772,7 @@ GH_CASES = {
         ),
         ("gh_update_issue", {**REPO, "number": 1, "state": "closed"}),
         ("gh_update_pull", {**REPO, "number": 2, "title": "t"}),
+        ("gh_merge_pull_request", {**REPO, "number": 2, "sha": "b" * 40}),
     ],
     "deny": [
         ("gh_delete_repo", REPO),
@@ -856,3 +873,23 @@ async def test_github_branch_protection_path_traversal_rejected(gh_registry):
         method="put",
     )
     assert fn.call_args[0][0].endswith("/branches/release/1.x/protection")
+
+
+def test_gh_create_repo_posts_to_user_repos(gh_registry):
+    from agentpass.services.http import GenericHTTPService
+
+    reg = gh_registry[0]
+    tool = reg.get_tool("gh_create_repo")
+    assert (tool.request.method, tool.request.path, tool.risk) == ("POST", "/user/repos", "high")
+    assert tool.remember_resource is None
+    args = {"name": "new-repo", "private": False, "description": "d (x), *y*"}
+    assert build_signature("gh_create_repo", args, reg) == "gh_create_repo(new-repo)"
+    assert GenericHTTPService._build_body(tool, {**args, "auto_init": False}) == {
+        "name": "new-repo",
+        "private": False,
+        "description": "d (x), *y*",
+        "auto_init": False,
+    }
+    for bad in ({"name": "x"}, {"name": "..", "private": True}, {"name": "a/b", "private": True}):
+        with pytest.raises(ValueError):
+            validate_args("gh_create_repo", bad, reg)

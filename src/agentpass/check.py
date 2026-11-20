@@ -63,6 +63,7 @@ TOOL_KEYS = {
     "audit",
     "risk",
     "remember",
+    "remember_resource",
     "preview",
 }
 

@@ -28,7 +28,7 @@ _IDEMPOTENCY_TABLE = """CREATE TABLE IF NOT EXISTS idempotency_keys (
 _REMEMBERED_TABLE = """CREATE TABLE IF NOT EXISTS remembered_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT NOT NULL,
-    scope TEXT NOT NULL CHECK (scope IN ('exact', 'tool')),
+    scope TEXT NOT NULL CHECK (scope IN ('exact', 'resource', 'tool')),
     tool_name TEXT NOT NULL,
     signature TEXT,
     args_hash TEXT,
@@ -120,7 +120,7 @@ _SCHEMA = ";\n".join([*_TABLES, *_INDEXES]) + ";\n"
 
 # Bump when the schema changes and add a step to _MIGRATIONS. A database with
 # user_version 0 is either brand new or from before versioning (v0 baseline).
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 async def _columns(conn: aiosqlite.Connection, table: str) -> set[str]:
@@ -188,6 +188,28 @@ async def _migrate_to_v7(conn: aiosqlite.Connection) -> None:
     await conn.execute(_PUSH_DEVICES_TABLE)
 
 
+async def _migrate_to_v8(conn: aiosqlite.Connection) -> None:
+    """Remembered rules may cover one resource (scope 'resource'): rebuild for the CHECK."""
+    cursor = await conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='remembered_rules'"
+    )
+    row = await cursor.fetchone()
+    if row is not None and "'resource'" in row[0]:
+        return
+    if row is not None:
+        columns = ", ".join(sorted(await _columns(conn, "remembered_rules")))
+        await conn.execute("ALTER TABLE remembered_rules RENAME TO remembered_rules_v7")
+        await conn.execute(_REMEMBERED_TABLE)
+        await conn.execute(
+            f"INSERT INTO remembered_rules ({columns}) SELECT {columns} FROM remembered_rules_v7"
+        )
+        await conn.execute("DROP TABLE remembered_rules_v7")  # drops its indexes too
+    else:
+        await conn.execute(_REMEMBERED_TABLE)
+    for statement in _REMEMBERED_INDEXES:
+        await conn.execute(statement)
+
+
 _MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
@@ -196,6 +218,7 @@ _MIGRATIONS = {
     5: _migrate_to_v5,
     6: _migrate_to_v6,
     7: _migrate_to_v7,
+    8: _migrate_to_v8,
 }
 
 

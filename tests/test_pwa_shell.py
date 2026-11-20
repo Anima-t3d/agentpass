@@ -42,6 +42,17 @@ async def test_manifest_fields(env):  # noqa: F811
         assert (await r.read()).startswith(PNG)
 
 
+async def test_notification_badge_is_a_small_white_mask(env):  # noqa: F811
+    """Android draws the badge as a status-bar mask: white shape, transparent background."""
+    r = await env.get("/icons/badge-96.png")
+    assert r.status == 200 and r.headers["Content-Type"] == "image/png"
+    png = await r.read()
+    assert png.startswith(PNG)
+    width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    assert (width, height) == (96, 96)
+    assert png[25] in (4, 6)  # colour type with an alpha channel
+
+
 async def test_icons_unknown_name_is_404(env):  # noqa: F811
     assert (await env.get("/icons/nope.png")).status == 404
     assert (await env.get("/icons/..%2Fpage.py")).status == 404
@@ -82,8 +93,29 @@ def test_sw_logic_file_ships_in_the_package():
     root = Path(__file__).parent.parent
     cfg = tomllib.loads((root / "pyproject.toml").read_text())
     patterns = cfg["tool"]["setuptools"]["package-data"]["agentpass"]
-    rel = SW_LOGIC.relative_to(root / "src" / "agentpass").as_posix()
-    assert any(fnmatch.fnmatch(rel, pat) for pat in patterns), (rel, patterns)
+    for path in (SW_LOGIC, HISTORY_LOGIC):
+        rel = path.relative_to(root / "src" / "agentpass").as_posix()
+        assert any(fnmatch.fnmatch(rel, pat) for pat in patterns), (rel, patterns)
+
+
+# The History formatting is tested in tests/js/history-logic.test.mjs; the page ships that file.
+HISTORY_LOGIC = SW_LOGIC.parent / "history-logic.mjs"
+
+
+def test_app_script_is_built_with_the_tested_history_logic():
+    js = assets.APP_JS
+    assert "export " not in js
+    for name in (
+        "entryDate",
+        "dayLabel",
+        "groupByDay",
+        "splitCall",
+        "resultNote",
+        "decisionLabel",
+        "resolvedByLabel",
+    ):
+        assert f"export function {name}(" in HISTORY_LOGIC.read_text(encoding="utf-8"), name
+        assert js.count(f"function {name}(") == 1, name
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -125,7 +157,6 @@ def test_app_script_has_history_and_devices_views():
         "retry-actions",
         "' (notification)'",
         "'Resolved by'",
-        "'Result'",
         "type: 'date'",
         "q.set('from', hv.from)",
         "No history loaded yet.",
@@ -215,3 +246,118 @@ def test_app_script_has_a_sign_out_control():
     assert 'id="signout"' in html and "Sign out" in html
     assert "api('/api/logout', {})" in js
     assert "getElementById('signout').hidden = on" in js
+
+
+# Browser built-ins the page script may call without defining them.
+JS_GLOBALS = {
+    "Date",
+    "Error",
+    "Map",
+    "Set",
+    "String",
+    "Number",
+    "Object",
+    "Array",
+    "JSON",
+    "Math",
+    "Promise",
+    "URL",
+    "URLSearchParams",
+    "Uint8Array",
+    "atob",
+    "btoa",
+    "decodeURIComponent",
+    "encodeURIComponent",
+    "fetch",
+    "isNaN",
+    "isFinite",
+    "setInterval",
+    "setTimeout",
+    "clearTimeout",
+    "clearInterval",
+    "requestAnimationFrame",
+}
+JS_KEYWORDS = {
+    "if",
+    "for",
+    "while",
+    "switch",
+    "catch",
+    "return",
+    "typeof",
+    "function",
+    "new",
+    "await",
+    "async",
+    "of",
+    "in",
+}
+
+
+def undefined_calls(js: str) -> set[str]:
+    """Bare calls in the script with no function, const/let/var or parameter of that name."""
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    code = re.sub(r"'(?:[^'\\\n]|\\.)*'", "''", code)
+    code = re.sub(r"`(?:[^`\\]|\\.)*`", "``", code)
+    code = re.sub(r"(?<![:\\])//[^\n]*", "", code)
+    calls = set(re.findall(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(", code))
+    defined = set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)", code))
+    defined |= set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", code))
+    params: set[str] = set()
+    for m in re.finditer(
+        r"\(([^()]*)\)\s*=>|\b([A-Za-z_$][\w$]*)\s*=>|function\s*[\w$]*\s*\(([^()]*)\)", code
+    ):
+        for group in m.groups():
+            if group:
+                params |= set(re.findall(r"[A-Za-z_$][\w$]*", group))
+    return calls - defined - params - JS_KEYWORDS - JS_GLOBALS
+
+
+def test_app_script_calls_only_functions_it_defines():
+    """A helper removed in one view and still called in another blanks that tab at runtime."""
+    assert undefined_calls(assets.APP_JS) == set()
+
+
+def test_undefined_call_check_catches_a_missing_helper():
+    js = "function a() { return b(1); }\nconst c = (x) => x(2);\nsetTimeout(a);"
+    assert undefined_calls(js) == {"b"}
+
+
+def test_history_entries_open_details_and_selects_have_their_own_arrow():
+    js = assets.APP_JS
+    for needle in (
+        "h('details'",
+        "h('summary'",
+        "detailRows(e)",
+        "whenText(d.last_seen)",
+        "cls: 'select'",
+    ):
+        assert needle in js, needle
+    css = assets.APP_CSS
+    for needle in (
+        ".select::after",
+        "appearance:none",
+        "::-webkit-date-and-time-value",
+        ".hist-item summary",
+    ):
+        assert needle in css, needle
+
+
+def test_date_filters_use_the_same_arrow_as_the_decision_select():
+    js = assets.APP_JS
+    assert "field('From', h('span', {cls: 'select'}, from))" in js
+    assert "field('To', h('span', {cls: 'select'}, to))" in js
+    css = assets.APP_CSS
+    # the native picker arrow is hidden but still covers the field, so a tap opens the picker
+    assert '.select input[type="date"]::-webkit-calendar-picker-indicator{' in css
+    assert "opacity:0" in css
+
+
+def test_the_card_offers_always_and_signs_the_scope():
+    from agentpass.passkey import assets
+
+    js = assets.APP_JS
+    assert "Remember this answer" in js and "Just this once" in js
+    assert "'/challenge', scope ? {remember: scope} : {}" in js
+    assert "{credential: await sign(s.id, scope), ...extra}" in js
+    assert ".remember-hint" in assets.APP_CSS

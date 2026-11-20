@@ -3,7 +3,8 @@
 #
 # Every mirror update asks: the approval shows the exact commit (sha, headline, author,
 # date), whether it is still the branch tip, and how it relates to what the mirror had,
-# with a warning when history was rewritten.
+# with a warning when history was rewritten. "Allow always: this repo" may then cover
+# every branch of one repository; the helper's allowlist still limits which can be fetched.
 rules:
   - pattern: "gh_mirror_fetch(*)"
     action: ask

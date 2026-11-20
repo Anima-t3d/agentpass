@@ -57,15 +57,25 @@ def _iso(epoch: float) -> str:
 
 
 def approval_challenge(
-    approval_id: str, agent_id: str, tool: str, args: Any, expires_at: float | int | str
+    approval_id: str,
+    agent_id: str,
+    tool: str,
+    args: Any,
+    expires_at: float | int | str,
+    remember: str | None = None,
 ) -> bytes:
-    """SHA-256(approval_id || agent_id || tool || canonical_json(args) || expires_at).
+    """SHA-256(approval_id || agent_id || tool || canonical_json(args) || expires_at
+    [|| "remember:" scope]).
 
     Each field is length-prefixed so the boundaries are unambiguous ("a"+"bc" differs
-    from "ab"+"c").
+    from "ab"+"c"). An "Allow always" answer signs its scope too, so an assertion made
+    for "once" cannot be turned into a remembered rule, or the other way round.
     """
     h = hashlib.sha256()
-    for part in (approval_id, agent_id, tool, canonical_json(args), expires_iso(expires_at)):
+    parts = [approval_id, agent_id, tool, canonical_json(args), expires_iso(expires_at)]
+    if remember is not None:
+        parts.append("remember:" + remember)
+    for part in parts:
         data = part.encode()
         h.update(len(data).to_bytes(4, "big"))
         h.update(data)

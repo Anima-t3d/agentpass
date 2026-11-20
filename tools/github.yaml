@@ -25,6 +25,8 @@ x-common:
     { type: string, required: true, max_length: 255, validate: "[A-Za-z0-9._/-]+", description: "Branch name" }
   sha: &sha
     { type: string, validate: "[0-9a-f]{40}|[0-9a-f]{64}", signature: false }
+  # "Allow always: this repo" in Telegram covers the tool in one repository
+  repo_resource: &repo_resource { label: repo, template: "{owner}/{repo}" }
   per_page: &per_page
     { type: integer, min: 1, max: 100, default: 30, signature: false }
   page: &page
@@ -59,6 +61,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   gh_get_branch:
     description: "Get a branch (its head commit)"
@@ -70,6 +73,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   gh_get_contents:
     description: "Get a file (base64 content and blob sha) or list a directory"
@@ -86,6 +90,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   gh_list_issues:
     description: "List issues of a repository (pull requests are included by GitHub)"
@@ -103,6 +108,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576, wrap: issues }
     risk: low
+    remember_resource: *repo_resource
 
   gh_get_issue:
     description: "Get an issue"
@@ -114,6 +120,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   gh_list_issue_comments:
     description: "List comments on an issue or pull request"
@@ -131,6 +138,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576, wrap: comments }
     risk: low
+    remember_resource: *repo_resource
 
   gh_list_pulls:
     description: "List pull requests of a repository"
@@ -148,6 +156,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576, wrap: pulls }
     risk: low
+    remember_resource: *repo_resource
 
   gh_get_pull:
     description: "Get a pull request"
@@ -159,6 +168,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   gh_list_workflow_runs:
     description: "List GitHub Actions workflow runs of a repository"
@@ -178,6 +188,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   gh_get_workflow_run:
     description: "Get a GitHub Actions workflow run"
@@ -192,6 +203,7 @@ tools:
       headers: *headers
     response: { max_bytes: 1048576 }
     risk: low
+    remember_resource: *repo_resource
 
   # --------------------------------------------------------------- writes
   gh_create_issue:
@@ -224,6 +236,7 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium
+    remember_resource: *repo_resource
 
   gh_create_issue_comment:
     description: "Comment on an issue or pull request"
@@ -251,6 +264,7 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium
+    remember_resource: *repo_resource
 
   gh_create_pull:
     description: "Open a pull request"
@@ -287,6 +301,38 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium
+    remember_resource: *repo_resource
+
+  gh_create_repo:
+    description: "Create a repository owned by the token's user. Say private: true or false"
+    signature: "{name}"
+    args:
+      name:
+        type: string
+        required: true
+        max_length: 100
+        validate: "(?!\\.{1,2}$)[A-Za-z0-9._-]+"
+        description: "Repository name"
+      private:
+        { type: boolean, required: true, signature: false, description: "true: only you can see it; false: public on GitHub" }
+      description: { type: string, max_length: 350, signature: false }
+      auto_init:
+        { type: boolean, default: false, signature: false, description: "Start with a README commit" }
+    preview:
+      title: "Create repository {name} (private: {private})"
+      summary: "Create repository {name} (private: {private})"
+      fields:
+        - { label: "Name", value: "{name}" }
+        - { label: "Private", value: "{private}" }
+        - { label: "Description", value: "{description}" }
+        - { label: "Start with a README", value: "{auto_init}" }
+    request:
+      method: POST
+      path: "/user/repos"
+      headers: *headers
+      body: { include: [name, private, description, auto_init] }
+    response: { max_bytes: 1048576 }
+    risk: high
 
   gh_create_branch:
     description: "Create a branch pointing at an existing commit sha"
@@ -314,6 +360,7 @@ tools:
       body: { include: [sha], map: { ref: "refs/heads/{branch}" } }
     response: { max_bytes: 1048576 }
     risk: medium
+    remember_resource: *repo_resource
 
   gh_put_contents:
     description: >-
@@ -343,6 +390,7 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [content], store_result: truncated }
     risk: medium
+    remember_resource: *repo_resource
 
   gh_update_issue:
     description: "Change an issue: title, body, state (with state_reason) or labels"
@@ -384,6 +432,7 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium
+    remember_resource: *repo_resource
 
   gh_update_pull:
     description: "Change a pull request: title, body, state or base branch"
@@ -419,6 +468,49 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [body], store_result: truncated }
     risk: medium
+    remember_resource: *repo_resource
+
+  gh_merge_pull_request:
+    description: >-
+      Merge a pull request. First read it with gh_get_pull and pass its head.sha as sha;
+      GitHub refuses the merge if the branch moved since. merge_method: merge (default),
+      squash or rebase.
+    signature: "{owner}/{repo}, {number}"
+    args:
+      owner: *owner
+      repo: *repo
+      number: *number
+      sha:
+        { type: string, required: true, validate: "[0-9a-f]{40}|[0-9a-f]{64}", signature: false, description: "Head commit sha of the pull request, from gh_get_pull" }
+      merge_method: { type: enum, values: [merge, squash, rebase], default: merge, signature: false }
+      commit_title: { type: string, max_length: 256, signature: false }
+      commit_message: { type: text, max_length: 65536, signature: false }
+    preview:
+      lookups:
+        - { id: current, path: "/repos/{owner}/{repo}/pulls/{number}", on_error: omit }
+      title: "Merge pull request #{number} into {current.base.ref} in {owner}/{repo}"
+      summary: "Merge pull request #{number} {current.title} into {current.base.ref} in {owner}/{repo}"
+      fields:
+        - { label: "Repository", value: "{owner}/{repo}" }
+        - { label: "Pull request", value: "#{number} {current.title} ({current.state})" }
+        - { label: "Branches", value: "{current.head.ref} into {current.base.ref}" }
+        - { label: "Approved head commit", value: "{sha}" }
+        - { label: "Head commit now", value: "{current.head.sha}" }
+        - { label: "Changes", value: "{current.commits} commits, {current.changed_files} files, +{current.additions} / -{current.deletions}" }
+        - { label: "Merge method", value: "{merge_method}" }
+        - { label: "Commit title", value: "{commit_title}" }
+      warnings:
+        - { when: { value: "{current.mergeable_state}", equals: "dirty" }, text: "GitHub reports conflicts with the base branch" }
+        - { when: { value: "{current.mergeable_state}", equals: "blocked" }, text: "Branch protection blocks this merge (checks or reviews)" }
+        - { when: { value: "{current.state}", equals: "closed" }, text: "The pull request is closed" }
+    request:
+      method: PUT
+      path: "/repos/{owner}/{repo}/pulls/{number}/merge"
+      headers: *headers
+      body: { include: [sha, merge_method, commit_title, commit_message] }
+    response: { max_bytes: 65536 }
+    audit: { redact_args: [commit_message], store_result: truncated }
+    risk: high
 
   gh_dispatch_workflow:
     description: "Trigger a workflow_dispatch event"
@@ -441,6 +533,7 @@ tools:
       body: { include: [ref, inputs] }
     response: { type: none }
     risk: medium
+    remember_resource: *repo_resource
 
   # ---------------------------------------- destructive or security-sensitive
   # These exist so the policy can name them; the shared rule set denies all of
@@ -462,6 +555,7 @@ tools:
       headers: *headers
     response: { type: none }
     risk: high
+    remember_resource: *repo_resource
 
   gh_update_branch_protection:
     description: "Change branch protection rules"
@@ -493,6 +587,7 @@ tools:
         include: [enforce_admins, required_status_checks, required_pull_request_reviews, restrictions]
     response: { max_bytes: 1048576 }
     risk: high
+    remember_resource: *repo_resource
 
   gh_add_collaborator:
     description: "Add a collaborator to a repository"
@@ -517,6 +612,7 @@ tools:
       body: { include: [permission] }
     response: { type: none }
     risk: high
+    remember_resource: *repo_resource
 
   gh_create_deploy_key:
     description: "Add a deploy key to a repository"
@@ -544,6 +640,7 @@ tools:
     response: { max_bytes: 1048576 }
     audit: { redact_args: [key] }
     risk: high
+    remember_resource: *repo_resource
 
   gh_delete_deploy_key:
     description: "Remove a deploy key from a repository"
@@ -565,6 +662,7 @@ tools:
       headers: *headers
     response: { type: none }
     risk: high
+    remember_resource: *repo_resource
 
   gh_set_actions_secret:
     description: "Create or update a repository Actions secret"
@@ -591,3 +689,4 @@ tools:
     response: { type: none }
     audit: { redact_args: [encrypted_value] }
     risk: high
+    remember_resource: *repo_resource

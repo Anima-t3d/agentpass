@@ -45,6 +45,7 @@ agentpass/
 │   │   ├── renderers.py      # Built-in renderers (entity_state, resource_summary); pure functions, no HTML
 │   │   ├── email_render.py   # email renderer (gmail_send_message): decodes signed raw, text only
 │   │   ├── diff_render.py    # diff renderer (gh_put_contents): unified diff, sha binding, size limits
+│   │   ├── automation_render.py # automation renderer (HA automation config): YAML diff, calls, warnings
 │   │   ├── htmltext.py       # whitelist HTML-to-text converter for the email renderer
 │   │   ├── timefmt.py        # lookup timestamps in approval.display_timezone with relative age
 │   │   └── sanitize.py       # control/bidi escape and strip, sanitize_note (agent_note)

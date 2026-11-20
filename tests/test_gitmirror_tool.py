@@ -309,9 +309,13 @@ def test_timeouts_are_nested():
 # --- example floor ----------------------------------------------------------
 
 
-async def test_example_floor_asks_and_refuses_remembered_allow(tmp_path):
-    """With the example floor, no allow (agent rule or remembered "Allow always") may skip
-    the approval: an allowed fetch has no pending row and would wait inline for minutes."""
+async def test_example_floor_lets_a_remembered_repo_skip_the_approval(tmp_path):
+    """No floor rule covers the mirror any more: "Allow always: this repo" applies.
+
+    An allowed fetch has no pending row, so it runs inside the agent's MCP call. Real
+    fetches take seconds; the agent's tool timeout (minutes) bounds the rest, and the
+    mirror still finishes the fetch if the agent stops waiting.
+    """
     import shutil
 
     from agentpass.db import Database
@@ -325,13 +329,12 @@ async def test_example_floor_asks_and_refuses_remembered_allow(tmp_path):
     _, digest = generate_token("a")
     (tmp_path / "agents" / "a.yaml").write_text(
         f"id: a\ntoken_hash: '{digest}'\nextends: [git_mirror]\n"
-        "rules:\n  - { pattern: 'gh_mirror_fetch(*)', action: allow }\n"
     )
     agent = load_agents(tmp_path / "agents", policy).get("a")
     reg = _registry()
     sig = build_signature(TOOL, ARGS, reg)
     result = PermissionEngine(agent.permissions, reg).evaluate(TOOL, ARGS, sig)
-    assert result.decision == Decision.ASK and result.floor
+    assert result.decision == Decision.ASK and not result.floor
 
     db = Database(str(tmp_path / "t.db"))
     await db.initialize()
@@ -340,11 +343,11 @@ async def test_example_floor_asks_and_refuses_remembered_allow(tmp_path):
             {
                 "agent_id": "a",
                 "tool_name": TOOL,
-                "scope": "tool",
-                "signature": None,
+                "scope": "resource",
+                "signature": "o/r",
                 "args_hash": None,
                 "action": "allow",
-                "pattern": f"{TOOL}(*)",
+                "pattern": f"{TOOL}(o/r, *)",
                 "tool_fingerprint": tool_fingerprint(reg.get_tool(TOOL)),
                 "created_at": iso(),
                 "expires_at": None,
@@ -353,11 +356,17 @@ async def test_example_floor_asks_and_refuses_remembered_allow(tmp_path):
             }
         )
         service = RememberedService(db, reg)
-        no_floor = await service.resolve("a", TOOL, sig, ARGS, Decision.ASK, None)
-        assert no_floor is not None and no_floor.decision == Decision.ALLOW  # rule is live
         verdict = await service.resolve(
             "a", TOOL, sig, ARGS, result.decision, result.approval, result.floor
         )
-        assert verdict is None
+        assert verdict is not None and verdict.decision == Decision.ALLOW
+        other = {**ARGS, "repo": "elsewhere"}
+        other_sig = build_signature(TOOL, other, reg)
+        assert (
+            await service.resolve(
+                "a", TOOL, other_sig, other, result.decision, result.approval, result.floor
+            )
+            is None
+        )
     finally:
         await db.close()

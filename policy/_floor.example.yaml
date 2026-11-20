@@ -7,6 +7,14 @@
 #         first matching ask in this file supplies the `approval` block.
 # Patterns match the call signature, like any other rule.
 rules:
+  - pattern: "ha_set_automation_config(*)"
+    action: ask
+    description: An automation runs its actions later without asking, so writing one needs a passkey
+    approval: { require: passkey }
+  - pattern: "ha_delete_automation_config(*)"
+    action: ask
+    description: Deleting an automation needs a passkey
+    approval: { require: passkey }
   - pattern: "gmail_delete_*"
     action: deny
     description: Never delete mail
@@ -14,6 +22,7 @@ rules:
     action: ask
     description: Sending mail always reaches a human, on a passkey
     approval: { require: passkey }
-  - pattern: "gh_mirror_fetch(*)"
+  - pattern: "gh_merge_*"
     action: ask
-    description: Every git mirror update is approved for its exact commit, never allowed always
+    description: Merging writes to the base branch, so it needs a passkey
+    approval: { require: passkey }

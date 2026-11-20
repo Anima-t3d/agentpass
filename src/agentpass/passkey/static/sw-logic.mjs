@@ -8,10 +8,15 @@
 // shell for everyone and carries no approval data.
 
 const CACHE = 'agentpass-shell-__VERSION__';
-const SHELL = [
+// Every notification shows the app icon; the badge is the monochrome mask Android draws in the
+// status bar (without one it shows the browser's logo).
+const ICON = '/icons/icon-192.png';
+const BADGE = '/icons/badge-96.png';
+export const SHELL = [
   '/', '/static/app.js', '/static/app.css', '/manifest.webmanifest',
-  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png',
+  ICON, '/icons/icon-512.png', '/icons/icon-maskable-512.png', BADGE,
 ];
+const branded = (options) => ({icon: ICON, badge: BADGE, ...options});
 const ACTION_URL = '/api/push/action';
 const SYNC_TAG = 'agentpass-actions';
 const DB_NAME = 'agentpass';
@@ -30,13 +35,13 @@ export function notificationFor(payload) {
   if (payload.require !== 'telegram') actions.unshift({action: 'approve', title: 'Approve'});
   return {
     title: payload.title,
-    options: {
+    options: branded({
       body: payload.body,
       tag: payload.approval_id,
       requireInteraction: true,
       actions,
       data: payload,
-    },
+    }),
   };
 }
 
@@ -120,9 +125,9 @@ export function setup(self, env) {
   let retrying = null;
   const settled = new Set();  // approvals whose action already got a final answer
 
-  const notice = (id, title, body) => self.registration.showNotification(title, {
+  const notice = (id, title, body) => self.registration.showNotification(title, branded({
     body, tag: id, requireInteraction: false, data: {type: 'notice', approval_id: id},
-  });
+  }));
 
   async function openUrl(url) {
     const wins = await self.clients.matchAll({type: 'window', includeUncontrolled: true});
@@ -202,14 +207,14 @@ export function setup(self, env) {
     let payload = null;
     try { payload = event.data.json(); } catch (e) { payload = null; }
     if (!payload || typeof payload.approval_id !== 'string') {
-      await self.registration.showNotification('AgentPass', {
-        body: 'Open AgentPass to see what changed.', tag: 'agentpass', data: {type: 'notice'}});
+      await self.registration.showNotification('AgentPass', branded({
+        body: 'Open AgentPass to see what changed.', tag: 'agentpass', data: {type: 'notice'}}));
     } else if (payload.type === 'resolved') {
       // The browser wants every push to show something: replace the notification with a
       // short note under the same tag, then close it.
-      await self.registration.showNotification(resolvedText(payload), {
+      await self.registration.showNotification(resolvedText(payload), branded({
         tag: payload.approval_id, silent: true, requireInteraction: false,
-        data: {type: 'notice', approval_id: payload.approval_id}});
+        data: {type: 'notice', approval_id: payload.approval_id}}));
       await env.delay(RESOLVED_SHOWN_MS);
       for (const n of await self.registration.getNotifications({tag: payload.approval_id})) {
         n.close();

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from agentpass.config import PreviewSpec, PreviewWarning, ToolDefinition
+from agentpass.preview.automation_render import render_automation
 from agentpass.preview.diff_render import render_diff
 from agentpass.preview.email_render import render_email
 from agentpass.preview.model import LookupNote, Preview, Section, Unavailable
@@ -35,7 +36,9 @@ DEFAULT_TIMEOUT = 3.0  # whole build, seconds
 DEFAULT_MAX_BYTES = 64 * 1024  # serialized preview
 SUMMARY_LIMIT = 300
 LOOKUP_MAX_BYTES = 256 * 1024
-IMPLEMENTED_RENDERERS = frozenset({"template", "entity_state", "email", "diff", "resource_summary"})
+IMPLEMENTED_RENDERERS = frozenset(
+    {"template", "entity_state", "email", "diff", "resource_summary", "automation"}
+)
 
 _REF_RE = re.compile(r"\{(\w+)((?:\.[\w-]+)*)\}")
 _MISSING = object()
@@ -228,6 +231,8 @@ class PreviewService:
             return render_resource_summary(values, notes, times=times, **kw)
         if spec.renderer == "email":
             return render_email(values, notes, params=spec.params, **kw)
+        if spec.renderer == "automation":
+            return render_automation(definition, values, notes, params=spec.params, **kw)
         return render_diff(values, notes, params=spec.params, **kw)
 
     async def _run_lookups(

@@ -1,5 +1,8 @@
 """PWA icons as embedded PNG bytes (a rounded square with a shield-check mark).
 
+``badge-96.png`` is the notification badge: the same mark as a white shape on transparency,
+which Android draws in the status bar.
+
 Generated once by a throwaway script; there is no build step. Base64 keeps the module small.
 """
 
@@ -157,8 +160,38 @@ _ICON_MASKABLE_512 = (
     "AIAAAAAEAAAgAAAAAQAACAAAYPgNdb12+9NEFkwAAAAASUVORK5CYII="
 )
 
+_BADGE_96 = (
+    "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"
+    "BQ2Tr+mvlCD0AAAAAElFTkSuQmCC"
+)
+
 ICONS: dict[str, bytes] = {
     "icon-192.png": base64.b64decode(_ICON_192),
     "icon-512.png": base64.b64decode(_ICON_512),
     "icon-maskable-512.png": base64.b64decode(_ICON_MASKABLE_512),
+    "badge-96.png": base64.b64decode(_BADGE_96),
 }

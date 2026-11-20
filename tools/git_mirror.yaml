@@ -53,3 +53,5 @@ tools:
         - { when: { value: "{relation.state}", equals: "unknown" }, text: "History check unavailable: cannot confirm this is a fast-forward" }
         - { when: { value: "{commit.is_tip}", equals: "no" }, text: "This commit is no longer the branch tip" }
     risk: medium
+    # "Allow always: this repo" covers every branch of one repository
+    remember_resource: { label: repo, template: "{owner}/{repo}" }

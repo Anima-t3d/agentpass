@@ -270,6 +270,11 @@ details.raw>.args{margin:0 var(--s3) var(--s3)}
   margin-top:var(--s2);min-height:1.5rem;color:var(--muted)}
 .hint.bad{color:var(--danger-text);font-weight:600}
 .hint.good{color:var(--ok-text);font-weight:600}
+.remember{margin-bottom:var(--s4)}
+.remember label{display:block;font-weight:600;margin-bottom:var(--s2)}
+.remember select.input{font-family:inherit}
+.remember-hint{display:grid;gap:var(--s1);margin-top:var(--s2);font-size:var(--fs-sm);color:var(--muted);overflow-wrap:anywhere}
+.remember-hint code{font-family:var(--mono);color:var(--text)}
 
 /* actions */
 .actionbar{position:sticky;bottom:0;display:flex;gap:var(--s3);
@@ -287,6 +292,8 @@ details.raw>.args{margin:0 var(--s3) var(--s3)}
 .btn-deny{background:var(--surface);color:var(--danger-text);border-color:var(--danger-border);
   flex:0 0 auto;padding:var(--s2) var(--s4)}
 .btn-deny:hover{background:var(--danger-bg);border-color:var(--danger)}
+.actionbar .btn{min-width:0;white-space:normal;text-align:center}
+.actionbar .btn-deny{flex:0 1 auto}
 .btn-quiet{background:var(--surface-2);color:var(--text);border-color:var(--border-strong);
   flex:none;min-height:44px;padding:var(--s2) var(--s4)}
 .btn:disabled{cursor:not-allowed;background:var(--surface-2);color:var(--muted);
@@ -411,8 +418,8 @@ async function api(path, body) {
 }
 async function session() { csrf = (await api('/api/session')).csrf; }
 
-async function sign(id) {
-  return assertWith(await api('/api/approvals/' + id + '/challenge', {}));
+async function sign(id, scope) {
+  return assertWith(await api('/api/approvals/' + id + '/challenge', scope ? {remember: scope} : {}));
 }
 async function assertWith(opts) {
   opts.challenge = b64d(opts.challenge);
@@ -587,7 +594,8 @@ function buildCard(p) {
     h('span', {text: 'Deny'}));
   const status = h('div', {cls: 'inline-status', role: 'status', 'aria-live': 'polite'});
   const state = {id: p.approval_id, tool: p.tool, el: card, ok, no, status, left,
-    deadline: Date.now() + p.expires_in * 1000, busy: false, confirmed: !drawn.confirm};
+    deadline: Date.now() + p.expires_in * 1000, busy: false, confirmed: !drawn.confirm,
+    remember: p.remember || null, scope: null};
 
   if (drawn.confirm) {
     const inputId = 'confirm-' + p.approval_id;
@@ -614,6 +622,7 @@ function buildCard(p) {
       input, hint));
     update();
   }
+  if (p.remember) card.append(drawRemember(p.remember, state));
   ok.addEventListener('click', () => decide(state, true));
   no.addEventListener('click', () => decide(state, false));
   card.append(h('div', {cls: 'actionbar'}, no, ok), status);
@@ -623,9 +632,52 @@ function buildCard(p) {
   return state;
 }
 
+/* "always": one choice for both buttons; each button only when its side offers it */
+const SCOPE_TEXT = {exact: 'This exact call', tool: 'This tool, any arguments'};
+function choiceOf(rem, side, scope) {
+  return (rem && rem[side] || []).find((c) => c.scope === scope) || null;
+}
+function forText(days) { return days ? 'for ' + days + ' days' : 'with no expiry'; }
+function drawRemember(rem, s) {
+  const scopes = ['exact', 'resource', 'tool'].filter((sc) =>
+    choiceOf(rem, 'allow', sc) || choiceOf(rem, 'deny', sc));
+  const id = 'remember-' + s.id;
+  const select = h('select', {cls: 'input', id: id, 'aria-describedby': id + '-hint'},
+    h('option', {value: '', text: 'Just this once'}),
+    ...scopes.map((sc) => h('option', {value: sc,
+      text: 'Always: ' + (sc === 'resource' ? 'this ' + (rem.label || 'resource') + ', any arguments'
+        : SCOPE_TEXT[sc])})));
+  const hint = h('div', {cls: 'remember-hint', id: id + '-hint'});
+  const update = () => {
+    s.scope = select.value || null;
+    s.ok.querySelector('.btn-label').textContent = s.scope ? 'Approve always' : 'Approve';
+    s.no.querySelector('span:last-child').textContent = s.scope ? 'Deny always' : 'Deny';
+    const lines = [];
+    if (s.scope) {
+      const a = choiceOf(rem, 'allow', s.scope), d = choiceOf(rem, 'deny', s.scope);
+      lines.push(a ? h('div', null, document.createTextNode('Approve always stores '),
+        h('code', {text: a.pattern}), document.createTextNode(' ' + forText(a.days)
+          + '. Later matching calls run without asking.'))
+        : h('div', {text: 'Approve always is not available for this request.'}));
+      lines.push(d ? h('div', null, document.createTextNode('Deny always stores '),
+        h('code', {text: d.pattern}), document.createTextNode(' ' + forText(d.days) + '.'))
+        : h('div', {text: 'Deny always is not available for this request.'}));
+      lines.push(h('div', {text: 'Revoke rules on the admin dashboard.'}));
+    }
+    hint.replaceChildren(...lines);
+    syncButtons(s);
+  };
+  select.addEventListener('change', update);
+  s.rememberUpdate = update;
+  return h('div', {cls: 'remember'}, h('label', {for: id, text: 'Remember this answer'}),
+    h('span', {cls: 'select'}, select), hint);
+}
+
 function syncButtons(s) {
-  s.ok.disabled = s.busy || netDown || !s.confirmed || s.expired === true;
-  s.no.disabled = s.busy || netDown || s.expired === true;
+  const allowOk = !s.scope || !!choiceOf(s.remember, 'allow', s.scope);
+  const denyOk = !s.scope || !!choiceOf(s.remember, 'deny', s.scope);
+  s.ok.disabled = s.busy || netDown || !s.confirmed || s.expired === true || !allowOk;
+  s.no.disabled = s.busy || netDown || s.expired === true || !denyOk;
 }
 
 function say(s, panel) {
@@ -664,10 +716,16 @@ async function decide(s, approve) {
   }
   syncButtons(s);
   try {
-    if (approve) await api('/api/approvals/' + s.id + '/approve', {credential: await sign(s.id)});
-    else await api('/api/approvals/' + s.id + '/deny', {});
-    closeCard(s, approve ? 'ok' : 'deny', approve ? 'Approved' : 'Denied',
-      s.tool + (approve ? ' was approved and will run.' : ' was denied. The agent was told no.'));
+    const scope = s.scope;
+    const extra = scope ? {remember: scope} : {};
+    if (approve) {
+      await api('/api/approvals/' + s.id + '/approve', {credential: await sign(s.id, scope), ...extra});
+    } else await api('/api/approvals/' + s.id + '/deny', extra);
+    const later = scope ? (approve ? ' Later matching calls run without asking.'
+      : ' Later matching calls are denied without asking.') : '';
+    closeCard(s, approve ? 'ok' : 'deny', approve ? (scope ? 'Approved always' : 'Approved')
+      : (scope ? 'Denied always' : 'Denied'),
+      s.tool + (approve ? ' was approved and will run.' : ' was denied. The agent was told no.') + later);
   } catch (e) {
     const f = failure(e);
     if (f.kind === 'resolved' || f.kind === 'expired') {
@@ -677,7 +735,7 @@ async function decide(s, approve) {
       s.el.removeAttribute('aria-busy');
       const spin = s.ok.querySelector('.spinner');
       if (spin) spin.replaceWith(icon('key'));
-      label.textContent = 'Approve';
+      label.textContent = s.scope ? 'Approve always' : 'Approve';
       say(s, {tone: f.kind === 'cancelled' ? 'info' : 'danger',
         icon: f.kind === 'cancelled' ? 'info' : 'alert', title: f.title, text: f.text});
       syncButtons(s);
