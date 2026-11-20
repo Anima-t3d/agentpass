@@ -9,10 +9,10 @@ Not published (the Pages workflow removes this file). Keep it in step with `inde
 | Approve or deny with a tap in Telegram | `pain-blocked` | `src/agentpass/approval/telegram_channel.py` |
 | Approval page with passkey confirmation | `pain-blocked` | `src/agentpass/passkey/page.py`, `src/agentpass/passkey/verify.py` |
 | Rules per tool and per argument: allow, ask, deny | `pain-blocked` | `src/agentpass/engine.py`, `policy/github.yaml` |
-| "Allow always" / "Deny always" for the exact call or the tool, within checked limits | `pain-blocked` | `src/agentpass/remembered.py`, `docs/REMEMBERED-DECISIONS.md` |
+| "Allow always" / "Deny always" for the exact call, one repository or the tool, within checked limits | `pain-blocked` | `src/agentpass/remembered.py`, `docs/REMEMBERED-DECISIONS.md` |
 | Previews: file diff, email as sent, comment text and its issue | `pain-blind` | `src/agentpass/preview/diff_render.py`, `src/agentpass/preview/email_render.py`, `tools/github.yaml` |
 | Previews built by the gateway from checked args and read-only lookups | `pain-blind` | `src/agentpass/preview/service.py`, `docs/APPROVAL-PREVIEWS.md` |
-| Approval app (installable PWA): push notifications say what's asked; Deny on the notification; Approve opens the request for the passkey or one-tap on allowed devices; approval history | `pain-blocked` | `docs/PWA.md`, `src/agentpass/push/channel.py`, `src/agentpass/passkey/pwa_views.py` |
+| Approval app (installable PWA): push notifications say what's asked; Deny on the notification; Approve opens the request for the passkey or one-tap on allowed devices; "always" answers from the app; approval history | `pain-blocked` | `docs/PWA.md`, `src/agentpass/push/channel.py`, `src/agentpass/passkey/pwa_views.py`, `src/agentpass/passkey/page.py` |
 | Agent's own note shown separately, labelled as agent-written | `pain-blind` | `src/agentpass/approval/channel.py`, `src/agentpass/passkey/assets.py` |
 | Preview failure shows raw args and never approves | `pain-blind` | `src/agentpass/preview/service.py`, `docs/APPROVAL-PREVIEWS.md` |
 | The agent never holds service credentials; they stay with the gateway under another user | `pain-bitten` | `docs/DESIGN.md` |
@@ -22,7 +22,8 @@ Not published (the Pages workflow removes this file). Keep it in step with `inde
 | Sending mail / changing a file asks; sensitive calls can require a passkey; deleting a repo is denied | `pain-burned` | `policy/github.yaml`, `policy/_floor.example.yaml` |
 | Audit log of who asked, what, decision and by whom; agent can't edit it | `pain-burned` | `src/agentpass/db.py`, `src/agentpass/dashboard/routes.py`, `docs/DESIGN.md` |
 | Agent drafts an issue comment, you see full text and issue, gateway posts with its own token | `github` | `tools/github.yaml` |
-| Private repo via a read-only mirror updated to one exact commit; preview shows repo, branch, commit, headline; agent pulls with plain git, no token | `github` | `tools/git_mirror.yaml`, `src/agentpass/gitmirror/helper.py`, `docs/DESIGN.md` |
+| Private repo via a read-only mirror updated to one exact commit; preview shows repo, branch, commit, headline; agent pulls with plain git, no token; can be allowed always per repository | `github` | `tools/git_mirror.yaml`, `src/agentpass/gitmirror/helper.py`, `docs/DESIGN.md`, `policy/git_mirror.yaml` |
+| Merging a PR: preview shows branches, change size, approved head commit, conflict warning; passkey every time; GitHub refuses if the head moved (sha) | `github` | `tools/github.yaml`, `policy/_floor.example.yaml`, `docs/APPROVAL-PREVIEWS.md` |
 | Agents connect over a Unix socket, WebSocket or MCP, each with its own token | `how` | `src/agentpass/listen.py`, `src/agentpass/server.py`, `src/agentpass/mcp.py`, `src/agentpass/agents.py` |
 | Deny beats allow, allow beats ask | `how` | `src/agentpass/engine.py`, `README.md` |
 | Request goes to every approval channel; first valid answer wins | `how` | `src/agentpass/approval/coordinator.py` |
@@ -31,13 +32,13 @@ Not published (the Pages workflow removes this file). Keep it in step with `inde
 | Policy floor no agent file can relax | `features` | `policy/_floor.example.yaml` |
 | Telegram buttons and passkey page; a rule can require a passkey | `features` | `src/agentpass/approval/telegram_channel.py`, `src/agentpass/passkey/channel.py`, `README.md` |
 | WebAuthn passkeys; only public keys stored | `features` | `src/agentpass/passkey/store.py`, `README.md` |
-| Previews: diffs, email, comment text, device state, what a delete removes | `features` | `src/agentpass/preview/renderers.py`, `tools/github.yaml`, `tools/homeassistant.yaml` |
-| Remembered decisions per exact call or tool, with limits | `features` | `docs/REMEMBERED-DECISIONS.md` |
+| Previews: diffs, email, comment text, device state, Home Assistant automations, what a delete removes | `features` | `src/agentpass/preview/renderers.py`, `src/agentpass/preview/automation_render.py`, `tools/github.yaml`, `tools/homeassistant.yaml` |
+| Remembered decisions per exact call, repository or tool, with limits | `features` | `docs/REMEMBERED-DECISIONS.md`, `src/agentpass/remembered.py` |
 | Audit log and admin-only dashboard | `features` | `src/agentpass/dashboard/routes.py`, `README.md` |
 | Unix socket, WebSocket, MCP, CLI, Python SDK; token and rules per agent | `features` | `src/agentpass/listen.py`, `src/agentpass/mcp.py`, `src/agentpass/cli.py`, `src/agentpass/client.py`, `src/agentpass/agents.py` |
 | Tools declared in YAML; GitHub, Gmail, Calendar, Drive, Home Assistant ship | `features` | `tools/github.yaml`, `tools/gmail.yaml`, `tools/calendar.yaml`, `tools/drive.yaml`, `tools/homeassistant.yaml` |
 | `agentpass check-config` offline check | `features` | `src/agentpass/check.py` |
-| Approval app: Deny from the notification, one-tap Approve on allowed devices, history | `features` | `docs/PWA.md`, `src/agentpass/push/routes.py` |
+| Approval app: Deny from the notification, one-tap Approve on allowed devices, "always" answers, history | `features` | `docs/PWA.md`, `src/agentpass/push/routes.py`, `src/agentpass/passkey/assets.py` |
 | Git mirror, one approved commit at a time, no token on the agent | `features` | `tools/git_mirror.yaml`, `src/agentpass/gitmirror/fetch.py` |
 | Threat model: protects against token reads, self-approval, own-permission changes, audit tampering; not root, operator phone/passkey, malicious service | `security` | `docs/DESIGN.md` |
 | Previews come from the gateway, so the approval shows what will run | `security` | `docs/APPROVAL-PREVIEWS.md` |
