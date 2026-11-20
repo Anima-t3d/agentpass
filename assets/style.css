@@ -672,6 +672,10 @@ html.js .approval[data-step="2"] .fake-approve {
   margin-bottom: 0;
 }
 
+.steps-more p + h3 {
+  margin-top: 1.25rem;
+}
+
 /* Only the GitHub steps reveal on scroll, one after another. */
 html.js .steps .reveal {
   opacity: 0;
