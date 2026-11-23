@@ -16,6 +16,7 @@ SITE = ROOT / "site"
 
 REPO_URL = "https://github.com/Anima-t3d/agentpass"
 UPSTREAM_URL = "https://github.com/TorbenWetter/agentpass"
+SITE_URL = "https://anima-t3d.github.io/agentpass/"
 
 SECTION_IDS = [
     "hero",
@@ -235,7 +236,9 @@ def test_no_third_party_resources():
         for attr in ("src", "srcset", "poster"):
             if attr in el.attrs:
                 assert is_relative(el.attrs[attr]), f"<{el.tag} {attr}={el.attrs[attr]}>"
-        if el.tag == "link":
+        if el.tag == "link" and el.attrs.get("rel") == "canonical":
+            assert el.attrs.get("href") == SITE_URL
+        elif el.tag == "link":
             assert is_relative(el.attrs.get("href", "")), f"<link href={el.attrs.get('href')}>"
     for url in re.findall(r"url\(\s*['\"]?([^'\")]+)", load_css()):
         assert is_relative(url), url
@@ -582,3 +585,29 @@ def test_shipped_features_are_listed_without_coming_soon():
         hits = [in_soon for data, in_soon in texts if term in data.lower()]
         assert hits, f"{term!r} is not on the page"
         assert not any(hits), f"{term!r} is still inside .soon"
+
+
+def test_search_and_share_metadata():
+    page = parse()
+    links = {el.attrs.get("rel"): el.attrs.get("href") for el in page.elements if el.tag == "link"}
+    assert links.get("canonical") == SITE_URL
+    meta = {
+        el.attrs.get("property") or el.attrs.get("name"): el.attrs.get("content")
+        for el in page.elements
+        if el.tag == "meta"
+    }
+    title = re.search(r"<title>(.*?)</title>", load_html()).group(1)
+    assert meta["og:type"] == "website"
+    assert meta["og:url"] == SITE_URL
+    assert meta["og:title"] == title
+    assert meta["og:description"] == meta["description"]
+    assert meta["twitter:card"] == "summary"
+    assert "robots" not in meta, "nothing may keep the page out of search"
+
+
+def test_sitemap_lists_the_page():
+    text = (SITE / "sitemap.xml").read_text(encoding="utf-8")
+    assert text.startswith("<?xml")
+    assert 'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"' in text
+    assert re.findall(r"<loc>(.*?)</loc>", text) == [SITE_URL]
+    assert re.search(r"<lastmod>\d{4}-\d{2}-\d{2}</lastmod>", text)
