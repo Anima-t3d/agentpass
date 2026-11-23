@@ -4,6 +4,8 @@
 
 Your agent asks, you approve, the gateway passes it through. Connect any HTTP API via YAML -- no Python code required. The agent never sees service credentials.
 
+Website: [anima-t3d.github.io/agentpass](https://anima-t3d.github.io/agentpass/)
+
 This project started as a fork of [TorbenWetter/agentpass](https://github.com/TorbenWetter/agentpass).
 
 ---
